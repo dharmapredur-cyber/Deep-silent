@@ -32,3 +32,22 @@ jobs:
           name: quiet-depth-apk
           path: quiet-depth.apk
           if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: quiet-depth-apk
+      - name: Publish the APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" quiet-depth.apk \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
+            --title "Тихая глубина ${GITHUB_REF_NAME#v}" \
+            --notes 'Скачайте и откройте quiet-depth.apk на телефоне. Требуется Android 7.0 или новее с обновлённым Android System WebView. APK собран в GitHub Actions и подписан отладочным ключом.'
