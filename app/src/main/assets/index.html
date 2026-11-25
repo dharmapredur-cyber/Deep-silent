@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#081d27">
+  <title>Тихая глубина</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="world.js"></script>
+  <script defer src="simulation.js"></script>
+  <script defer src="renderer.js"></script>
+  <script defer src="game.js"></script>
+</head>
+<body>
+  <main id="app">
+    <canvas id="ocean" aria-label="Игровой мир Тихой глубины"></canvas>
+
+    <section id="cover" class="cover" aria-labelledby="title">
+      <header class="cover-header">
+        <div class="brand"><span class="brand-mark" data-icon="depth"></span><span>ФРИДАЙВИНГ</span></div>
+        <button class="icon-button sound-button" type="button" aria-label="Выключить звук" title="Звук" data-sound><span data-icon="sound"></span></button>
+      </header>
+      <div class="cover-body">
+        <h1 id="title">ТИХАЯ<br><span>ГЛУБИНА</span></h1>
+        <p>Исследуй рифы и пещеры. Поднимай сокровища на поверхность, пока хватает воздуха.</p>
+        <div class="cover-actions">
+          <button class="primary" id="start" type="button"><span data-icon="down"></span><span>Погрузиться</span></button>
+          <button class="subtle" id="guide" type="button"><span data-icon="help"></span><span>Как играть</span></button>
+        </div>
+      </div>
+      <footer class="cover-footer">
+        <div class="cover-controls">
+          <span class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>Плыть</span>
+          <span class="keys"><kbd>Shift</kbd></span><span>Рывок</span>
+          <span class="keys"><kbd>Space</kbd></span><span>Гарпун</span>
+        </div>
+        <div class="cover-touch"><span data-icon="move"></span><span>Джойстик для плавания</span></div>
+        <span class="cover-status" id="cover-status" hidden></span>
+      </footer>
+    </section>
+
+    <section id="overlay" class="game-overlay" aria-label="Интерфейс игры" hidden>
+      <header class="hud">
+        <div class="hud-card oxygen">
+          <span class="hud-icon" data-icon="air"></span>
+          <div class="oxygen-content">
+            <div class="oxygen-meta"><span class="hud-label">КИСЛОРОД</span><strong id="air-text">28 / 28 с</strong></div>
+            <div class="meter" role="progressbar" id="air-meter" aria-label="Кислород" aria-valuemin="0" aria-valuemax="28" aria-valuenow="28"><div id="air-fill"></div></div>
+          </div>
+        </div>
+        <div class="hud-card indicators">
+          <div class="indicator"><span class="hud-label">ГЛУБИНА</span><strong id="depth">0 <small>м</small></strong></div>
+          <div class="indicator"><span class="hud-label">БАЛАНС</span><strong id="xp">0 <small>ОП</small></strong></div>
+          <div class="indicator life"><span class="hud-label">ЖИЗНИ</span><span class="hearts" id="hearts"></span></div>
+        </div>
+        <div class="hud-actions">
+          <button class="icon-button hud-button" id="map" type="button" aria-label="Карта" title="Карта · M"><span data-icon="map"></span></button>
+          <button class="icon-button hud-button gear" id="shop" type="button" aria-label="Снаряжение" title="Снаряжение · E"><span data-icon="gear"></span><span class="gear-label">Снаряжение</span></button>
+          <button class="icon-button hud-button" id="pause" type="button" aria-label="Пауза" title="Пауза · Esc"><span data-icon="pause"></span></button>
+        </div>
+      </header>
+
+      <div class="toast-stack" id="toasts" aria-live="polite"></div>
+      <div class="edge-signal" id="edge-signal"></div>
+
+      <div class="game-footer">
+        <div class="location"><span data-icon="pin"></span><span id="zone">Зелёная бухта</span></div>
+        <div class="surface-tip" id="tip"></div>
+        <div class="bag" id="bag" title="Добыча начисляется при всплытии"><span data-icon="bag"></span><span id="bag-text">Добыча 0 ОП</span></div>
+      </div>
+      <div class="touch-controls">
+        <div id="joystick" class="joystick" aria-label="Джойстик плавания"><span data-icon="move"></span><div id="knob" class="knob"></div></div>
+        <div class="touch-actions">
+          <button class="touch-button" id="attack" type="button" aria-label="Выстрелить гарпуном"><span data-icon="spear"></span><span>Гарпун</span></button>
+          <button class="touch-button boost" id="boost" type="button" aria-label="Ускориться"><span data-icon="bolt"></span><span>Рывок</span><i id="stamina"></i></button>
+        </div>
+      </div>
+    </section>
+
+    <div class="modal-layer" id="modal" hidden>
+      <section id="panel" class="panel" role="dialog" aria-modal="true" aria-labelledby="panel-title" tabindex="-1">
+        <header class="panel-head">
+          <div><div id="panel-kicker" class="panel-kicker"></div><h2 id="panel-title"></h2></div>
+          <button class="icon-button" id="close" type="button" aria-label="Закрыть"><span data-icon="close"></span></button>
+        </header>
+        <div id="panel-content"></div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

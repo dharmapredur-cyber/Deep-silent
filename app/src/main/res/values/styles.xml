@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Тихая глубина</string>
+    <style name="Theme.SilentDepth" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#071A24</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#DDFB8E</item>
+        <item name="android:navigationBarColor">#071A24</item>
+        <item name="android:statusBarColor">#071A24</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>
