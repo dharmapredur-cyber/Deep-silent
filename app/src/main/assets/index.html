@@ -9,6 +9,7 @@
   <script defer src="world.js"></script>
   <script defer src="simulation.js"></script>
   <script defer src="renderer.js"></script>
+  <script defer src="recordings.js"></script>
   <script defer src="audio.js"></script>
   <script defer src="game.js"></script>
 </head>
@@ -70,6 +71,9 @@
         <div class="surface-tip" id="tip"></div>
         <div class="bag" id="bag" title="Опыт за находки и победы начисляется при всплытии"><span data-icon="bag"></span><span id="bag-text">0 ОП к зачислению</span></div>
       </div>
+      <button class="icon-button mine-tool" id="defuse" type="button" title="Обезвредить мину · R">
+        <span data-icon="kit"></span><span>Наборы</span><strong id="kit-count">0</strong>
+      </button>
       <div class="touch-controls">
         <div id="joystick" class="joystick" aria-label="Джойстик плавания"><span data-icon="move"></span><div id="knob" class="knob"></div></div>
         <div class="touch-actions">

@@ -5,6 +5,7 @@
     find: [510, 786, .20], bank: [392, 698, .39], damage: [138, 42, .27],
     warning: [275, 222, .29], shot: [190, 82, .10], kill: [452, 612, .23],
     upgrade: [390, 620, .24], zone: [280, 410, .44], milestone: [550, 880, .49],
+    shield: [470, 760, .24], defuse: [670, 398, .19], 'electric-charge': [148, 326, .39],
   };
 
   class DiveAudio {
@@ -33,6 +34,13 @@
       compressor.ratio.value = 4;
       this.master = context.createGain();
       this.master.connect(compressor).connect(context.destination);
+      this.recordings = {};
+      for (const [name, encoded] of Object.entries(window.DepthRecordings)) {
+        const bytes = Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
+        void context.decodeAudioData(bytes.buffer)
+          .then(buffer => { this.recordings[name] = buffer; })
+          .catch(() => { /* Use a synthesized cue if this WebView cannot decode MP3. */ });
+      }
       this.noise = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
       const samples = this.noise.getChannelData(0);
       for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
@@ -129,25 +137,58 @@
       }
     }
 
+    playRecording(name, out, at, volume) {
+      const buffer = this.recordings[name];
+      if (!buffer) return false;
+      const source = this.context.createBufferSource();
+      const gain = this.context.createGain();
+      source.buffer = buffer;
+      gain.gain.value = volume;
+      source.connect(gain).connect(out);
+      source.start(at);
+      if (name !== 'mine') {
+        this.breathSource = source;
+        source.onended = () => {
+          if (this.breathSource === source) this.breathSource = null;
+        };
+      }
+      return true;
+    }
+
+    stopBreath() {
+      if (!this.breathSource) return;
+      this.breathSource.stop();
+      this.breathSource = null;
+    }
+
     play(kind, { volume = 1, pan = 0 } = {}) {
       if (this.muted || !this.master || this.context.state !== 'running' || volume < .025) return;
       const time = this.context.currentTime;
       const out = this.effectOutput(pan);
 
-      if (kind === 'dive-in') {
-        this.breath(out, time, true);
-        this.splash(out, time + .13, .58, 1250);
+      if (kind === 'inhale') {
+        this.stopBreath();
+        if (!this.playRecording('inhale', out, time, .89)) this.breath(out, time, true);
+      } else if (kind === 'breath-cancel') {
+        this.stopBreath();
+      } else if (kind === 'dive-in') {
+        this.splash(out, time, .54, 1250);
       } else if (kind === 'surface') {
         this.splash(out, time, .43, 1470);
-        this.breath(out, time + .10, false);
+        this.stopBreath();
+        if (!this.playRecording('surface', out, time + .10, .82)) this.breath(out, time + .10, false);
       } else if (kind === 'swim' || kind === 'boost-swim' || kind === 'predator-swim') {
         const gain = { swim: .20, 'boost-swim': .31, 'predator-swim': .26 }[kind];
         this.splash(out, time, gain * volume, 530 + Math.random() * 180);
       } else if (kind === 'mine') {
+        if (this.playRecording('mine', out, time, .61)) return;
         this.noiseBurst(out, time, .83, 510, 82, .84, .012, 'lowpass');
         this.noiseBurst(out, time + .014, .31, 2250, 290, .58, .011);
         this.note(out, time, .72, 100, 34, .50, 'triangle');
         this.splash(out, time + .060, .46, 700);
+      } else if (kind === 'electric') {
+        this.noiseBurst(out, time, .34, 2300, 560, .53, .011);
+        this.note(out, time, .28, 275, 85, .18, 'triangle');
       } else if (kind === 'knife') {
         this.noiseBurst(out, time, .17, 2550, 720, .26, .02);
         this.note(out, time + .016, .09, 530, 320, .056);

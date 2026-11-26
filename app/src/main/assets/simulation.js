@@ -6,12 +6,29 @@
   const knifeReach = 56;
   const knifeArc = .91;
   const knifeDuration = .20;
+  const mineKitCost = 100;
+  const mineKitReach = 85;
+  const breathDuration = .82;
+  const treasureDelay = 120_000;
+  const predatorDelay = 90_000;
   const upgrades = [
     { id: 'air', icon: 'air', name: 'Запас воздуха', costs: [85, 175, 315], values: [28, 36, 46, 58], copy: 'Больше времени на глубине.' },
     { id: 'speed', icon: 'bolt', name: 'Скорость', costs: [100, 215, 340], values: [218, 248, 279, 313], copy: 'Быстрее гребок и рывок.' },
     { id: 'life', icon: 'heart', name: 'Запас жизней', costs: [135, 275, 420], values: [3, 4, 5, 6], copy: 'Помогает пережить столкновения.' },
     { id: 'weapon', icon: 'spear', name: 'Гарпун', costs: [130, 280, 440], values: [0, 1, 2, 3], copy: 'Больше урона на расстоянии.' },
+    { id: 'insulation', icon: 'shield', name: 'Электрозащита', costs: [150, 270, 420], values: [0, 1, 2, 3], copy: 'Костюм защищает от разрядов скатов.' },
   ];
+
+  function savedIds(values, sites) {
+    return Array.isArray(values) ? [...new Set(values.filter(id => Number.isInteger(id) && sites[id]))] : [];
+  }
+
+  function recoveryTimes(ids, time, previous, delay, depth) {
+    const entries = ids.filter(id => W.renewsAt(depth(id))).map(id => [
+      id, Number.isFinite(previous?.[id]) ? previous[id] : time + delay,
+    ]);
+    return Object.fromEntries(entries);
+  }
 
   function load() {
     let saved;
@@ -22,11 +39,19 @@
       const value = Number(saved.levels && saved.levels[item.id]) || 0;
       levels[item.id] = W.clamp(Math.floor(value), 0, item.costs.length);
     }
+    const haul = savedIds(saved.haul, W.treasures);
+    const gonePredators = savedIds(saved.gonePredators, W.predatorSites);
+    const time = Date.now();
+    const kits = Number.isSafeInteger(saved.kits) && saved.kits >= 0 ? saved.kits : 0;
     return {
       xp: Math.max(0, Math.floor(Number(saved.xp) || 0)),
       levels,
-      haul: Array.isArray(saved.haul) ? [...new Set(saved.haul.filter(id => Number.isInteger(id) && W.treasures[id]))] : [],
-      gonePredators: Array.isArray(saved.gonePredators) ? [...new Set(saved.gonePredators.filter(id => Number.isInteger(id) && W.predatorSites[id]))] : [],
+      haul,
+      gonePredators,
+      treasureRecovery: recoveryTimes(haul, time, saved.treasureRecovery, treasureDelay, id => W.treasures[id].y),
+      predatorRecovery: recoveryTimes(gonePredators, time, saved.predatorRecovery, predatorDelay, id => W.predatorSites[id][1]),
+      kits,
+      disarmedMines: savedIds(saved.disarmedMines, W.mineSites),
       bestDepth: Math.max(0, Math.floor(Number(saved.bestDepth) || 0)),
       foundZones: Array.isArray(saved.foundZones) ? saved.foundZones.filter(id => W.zones.some(zone => zone.id === id)) : [],
       muted: saved.muted === true,
@@ -37,7 +62,7 @@
     return {
       id, x, y, homeX: x, homeY: y, type, hp: W.predatorTypes[type].hp,
       dead, face: id % 2 ? 1 : -1, chasing: false, stagger: 0, phase: id * 2.399,
-      strokeDistance: W.seed(id + 18) * 58,
+      strokeDistance: W.seed(id + 18) * 58, charge: 0, discharge: 0, zapCooldown: 0,
     };
   }
 
@@ -61,6 +86,7 @@
     get meters() { return Math.max(0, Math.round(this.player.y / 18)); }
 
     resetExpedition() {
+      this.now = Date.now();
       this.player = {
         x: W.spawn.x, y: W.spawn.y, vx: 0, vy: 0, angle: .18, face: 1,
         lives: this.value('life'), air: this.value('air'), stamina: 1, invulnerable: 0,
@@ -74,14 +100,17 @@
       this.knifeCooldown = 0;
       this.knifeSlash = null;
       this.strokeDistance = 0;
+      this.breathTime = 0;
       this.impact = 0;
       this.airNotice = false;
       this.sprint = false;
       this.phase = 0;
       this.activeZone = W.zone(this.player.x, this.player.y);
-      this.mines = W.mineSites.map(([x, y], id) => ({ x, y, id, live: true, fuse: 0 }));
+      this.mines = W.mineSites.map(([x, y], id) => ({
+        x, y, id, live: !this.profile.disarmedMines.includes(id), fuse: 0,
+      }));
       this.predators = W.predatorSites.map((site, id) =>
-        createPredator(site, id, this.profile.gonePredators.includes(id))
+        createPredator(site, id, this.profile.gonePredators.includes(id) && !this.predatorReady(id))
       );
     }
 
@@ -97,10 +126,71 @@
         this.knifeCooldown = 0;
         this.knifeSlash = null;
         this.strokeDistance = 0;
+        this.breathTime = 0;
         this.airNotice = false;
         this.sprint = false;
         this.activeZone = W.zone(this.player.x, this.player.y);
       }
+    }
+
+    treasureAvailable(item) {
+      return !this.haul.includes(item.id)
+        && (!this.profile.haul.includes(item.id) || this.profile.treasureRecovery[item.id] <= this.now);
+    }
+
+    predatorReady(id) {
+      return this.profile.predatorRecovery[id] <= this.now;
+    }
+
+    recoverPredators() {
+      const p = this.player;
+      for (const predator of this.predators) {
+        if (!predator.dead || !this.predatorReady(predator.id) || this.defeated.includes(predator.id)) continue;
+        if (Math.hypot(p.x - predator.homeX, p.y - predator.homeY) < 220) continue;
+        this.predators[predator.id] = createPredator(W.predatorSites[predator.id], predator.id);
+      }
+    }
+
+    get canBuyKit() { return this.atSurface && this.profile.xp >= mineKitCost; }
+
+    buyKit() {
+      if (!this.canBuyKit) return false;
+      this.profile.xp -= mineKitCost;
+      this.profile.kits++;
+      this.save();
+      this.announce('upgrade', 'Набор куплен · запас ' + this.profile.kits);
+      return true;
+    }
+
+    nearbyMine() {
+      if (this.atSurface) return undefined;
+      const p = this.player;
+      let nearest = mineKitReach;
+      let target;
+      for (const mine of this.mines) {
+        if (!mine.live) continue;
+        const distance = Math.hypot(p.x - mine.x, p.y - mine.y);
+        if (distance > nearest || !W.lineClear(p.x, p.y, mine.x, mine.y)) continue;
+        nearest = distance;
+        target = mine;
+      }
+      return target;
+    }
+
+    defuseMine() {
+      if (this.atSurface) return false;
+      const mine = this.nearbyMine();
+      if (!mine || this.profile.kits === 0) {
+        this.announce('locked', mine ? 'Купи набор на поверхности' : 'Подплыви ближе к мине');
+        return false;
+      }
+      mine.live = false;
+      this.profile.kits--;
+      this.profile.disarmedMines.push(mine.id);
+      this.save();
+      this.spark(mine.x, mine.y, '#c4efb1', 18, 74);
+      this.announce('defuse', 'Мина обезврежена');
+      return true;
     }
 
     upgradeOffer(item) {
@@ -223,30 +313,50 @@
     bankRewards() {
       this.shots = [];
       this.knifeSlash = null;
-      const hasTreasure = this.haul.length > 0;
+      const treasureCount = this.profile.haul.length;
       if (this.pendingXp > 0) {
         this.profile.xp += this.pendingXp;
-        this.profile.haul.push(...this.haul);
-        this.profile.gonePredators.push(...this.defeated);
+        for (const id of this.haul) {
+          if (!this.profile.haul.includes(id)) this.profile.haul.push(id);
+          if (W.renewsAt(W.treasures[id].y)) this.profile.treasureRecovery[id] = this.now + treasureDelay;
+        }
+        for (const id of this.defeated) {
+          if (!this.profile.gonePredators.includes(id)) this.profile.gonePredators.push(id);
+          if (W.renewsAt(W.predatorSites[id][1])) this.profile.predatorRecovery[id] = this.now + predatorDelay;
+        }
         this.announce('bank', '+' + this.pendingXp + ' ОП зачислено');
         this.spark(this.player.x, 2, '#dcfc93', 22);
         this.haul = [];
         this.defeated = [];
         this.pendingXp = 0;
-        if (hasTreasure && this.profile.haul.length === W.treasures.length) this.announce('milestone', 'Все сокровища подняты!');
+        if (treasureCount < W.treasures.length && this.profile.haul.length === W.treasures.length) {
+          this.announce('milestone', 'Все сокровища найдены!');
+        }
       }
       this.save();
     }
 
     step(dt, controls) {
+      this.now = Date.now();
       this.phase += dt;
       const p = this.player;
       const { x, y, boost, attack, knife } = controls;
       const norm = Math.max(1, Math.hypot(x, y));
       const ux = x / norm;
-      const uy = y / norm;
-      const steering = Math.hypot(ux, uy);
+      let uy = y / norm;
       const underwater = !this.atSurface;
+      if (!underwater && uy > .25) {
+        if (this.breathTime === 0) this.announce('inhale');
+        this.breathTime += dt;
+        if (this.breathTime < breathDuration) {
+          uy = 0;
+          p.vy = Math.min(0, p.vy);
+        }
+      } else if (this.breathTime > 0) {
+        if (!underwater) this.announce('breath-cancel');
+        this.breathTime = 0;
+      }
+      const steering = Math.hypot(ux, uy);
       this.sprint = underwater && boost && steering > .1 && p.stamina > .02;
       const speed = this.value('speed') * (this.sprint ? 1.86 : 1);
       p.stamina = W.clamp(p.stamina + dt * (this.sprint ? -.51 : .30), 0, 1);
@@ -321,8 +431,8 @@
 
       if (!this.atSurface) {
         for (const item of W.treasures) {
-          if (Math.hypot(item.x - p.x, item.y - p.y) > 27 || this.haul.includes(item.id)
-            || this.profile.haul.includes(item.id) || !W.lineClear(p.x, p.y, item.x, item.y)) continue;
+          if (Math.hypot(item.x - p.x, item.y - p.y) > 27 || !this.treasureAvailable(item)
+            || !W.lineClear(p.x, p.y, item.x, item.y)) continue;
           const info = W.treasureTypes[item.type];
           this.haul.push(item.id);
           this.pendingXp += info.xp;
@@ -345,6 +455,7 @@
       }
       if (attack) this.shoot(ux, uy);
       if (knife) this.swingKnife(ux, uy);
+      this.recoverPredators();
       this.updatePredators(dt);
       if (!p.lives) return;
       this.updateShots(dt);
@@ -359,6 +470,31 @@
       this.effects = this.effects.filter(effect => effect.ttl > 0);
     }
 
+    updateElectricAttack(predator, info, dt) {
+      const p = this.player;
+      const electric = info.electric;
+      const inRange = !this.atSurface && Math.hypot(p.x - predator.x, p.y - predator.y) <= electric.radius
+        && W.lineClear(predator.x, predator.y, p.x, p.y);
+      predator.discharge = Math.max(0, predator.discharge - dt);
+      predator.zapCooldown = Math.max(0, predator.zapCooldown - dt);
+      if (predator.charge > 0) {
+        predator.charge -= dt;
+        if (predator.charge > 0) return;
+        predator.charge = 0;
+        predator.discharge = .38;
+        predator.zapCooldown = 2.45;
+        this.spark(predator.x, predator.y, '#b2e7ff', 20, 150);
+        this.announce('electric');
+        if (inRange) {
+          if (this.value('insulation') >= electric.level) this.announce('shield', 'Костюм поглотил разряд');
+          else this.damage(info.damage, info.name + ' · разряд ' + electric.level + ' ур.', 'electric-hit');
+        }
+      } else if (predator.chasing && inRange && predator.zapCooldown === 0) {
+        predator.charge = .65;
+        this.announce('electric-charge');
+      }
+    }
+
     updatePredators(dt) {
       const p = this.player;
       for (const predator of this.predators) {
@@ -366,13 +502,14 @@
         const info = W.predatorTypes[predator.type];
         const range = Math.hypot(p.x - predator.x, p.y - predator.y);
         predator.chasing = !this.atSurface && range < info.range && W.lineClear(predator.x, predator.y, p.x, p.y)
-          && Math.hypot(p.x - predator.homeX, p.y - predator.homeY) < info.range * 1.7;
+          && Math.hypot(p.x - predator.homeX, p.y - predator.homeY) < info.range * (info.electric ? 1.12 : 1.7);
         predator.stagger = Math.max(0, predator.stagger - dt);
         const targetX = predator.chasing ? p.x : predator.homeX + Math.sin(this.phase * .73 + predator.phase) * 64;
         const targetY = predator.chasing ? p.y : predator.homeY + Math.cos(this.phase * .57 + predator.phase) * 30;
         const angle = Math.atan2(targetY - predator.y, targetX - predator.x);
         if (Math.abs(targetX - predator.x) > 5) predator.face = Math.sign(targetX - predator.x);
-        const speed = predator.stagger > 0 ? -40 : (predator.chasing ? info.chase : info.patrol);
+        let speed = predator.stagger > 0 ? -40 : (predator.chasing ? info.chase : info.patrol);
+        if (predator.charge > 0) speed *= .12;
         const step = Math.min(Math.abs(speed) * dt, Math.hypot(targetX - predator.x, targetY - predator.y)) * Math.sign(speed);
         const oldX = predator.x;
         const oldY = predator.y;
@@ -388,11 +525,13 @@
             });
           }
         }
-        if (predator.chasing && range < 10 + info.size * .67) {
+        if (info.electric) {
+          this.updateElectricAttack(predator, info, dt);
+        } else if (predator.chasing && range < 10 + info.size * .67) {
           this.damage(info.damage, info.name);
           predator.stagger = .55;
-          if (!p.lives) return;
         }
+        if (!p.lives) return;
       }
     }
 
@@ -418,5 +557,5 @@
     }
   }
 
-  window.DepthSimulation = { Dive, upgrades, knifeReach, knifeArc, knifeDuration };
+  window.DepthSimulation = { Dive, upgrades, knifeReach, knifeArc, knifeDuration, mineKitCost };
 })();

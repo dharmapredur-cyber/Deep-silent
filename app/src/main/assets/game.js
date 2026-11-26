@@ -2,7 +2,7 @@
   'use strict';
 
   const W = window.DepthWorld;
-  const { Dive, upgrades } = window.DepthSimulation;
+  const { Dive, upgrades, mineKitCost } = window.DepthSimulation;
   const byId = id => document.getElementById(id);
   const icons = {
     depth: '<path d="m3 12 5-5 4 4 4-4 5 5M6 16l6 5 6-5"/><circle cx="12" cy="4" r="1" fill="currentColor" stroke="none"/>',
@@ -15,6 +15,8 @@
     bolt: '<path d="m13.5 2-9 12H11l-1 8 9.5-12H13z"/>',
     spear: '<path d="m4 20 13-13m-4 0 7-3-3 7M4 15l5 5"/>',
     knife: '<path d="m4 20 5-5m-2-2 4 4m-1-3 2.5-6L21 3l-3 8.5L12 16"/>',
+    shield: '<path d="M12 21c-3-1.6-7-4.3-7-8.7V6l7-3 7 3v6.3c0 4.4-4 7.1-7 8.7Z"/><path d="m13 7-3 5h4l-3 5"/>',
+    kit: '<rect x="3" y="8" width="18" height="12" rx="2"/><path d="M8 8V5h8v3M3 13h18m-11-2v4m4-4v4"/>',
     map: '<path d="m3 6 6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14m6-12v14"/>',
     gear: '<path d="M4 7h16M4 12h16M4 17h16"/><path d="M8 5v4m8 1v4m-5 1v4" stroke-width="3"/>',
     pause: '<path d="M9 5v14m6-14v14" stroke-width="2.3"/>',
@@ -108,11 +110,16 @@
     const current = Math.ceil(p.air);
     const lives = dive.value('life');
     const low = p.air < 7;
-    const ready = upgrades.some(upgrade => dive.upgradeOffer(upgrade).canBuy);
+    const ready = dive.canBuyKit || upgrades.some(upgrade => dive.upgradeOffer(upgrade).canBuy);
+    const nearMine = Boolean(dive.nearbyMine());
+    const preparing = dive.atSurface && dive.breathTime > 0;
     byId('air-fill').style.transform = 'scaleX(' + Math.max(0, p.air / maximum) + ')';
     byId('stamina').style.transform = 'scaleX(' + p.stamina + ')';
     byId('edge-signal').style.opacity = Math.max(dive.impact * .70, low ? .14 + Math.sin(dive.phase * 6) * .055 : 0);
-    const key = [current, maximum, dive.meters, dive.profile.xp, p.lives, lives, dive.activeZone.id, dive.pendingXp, ready, dive.atSurface, low, dive.value('weapon')].join(',');
+    const key = [
+      current, maximum, dive.meters, dive.profile.xp, p.lives, lives, dive.activeZone.id,
+      dive.pendingXp, ready, dive.atSurface, low, dive.value('weapon'), dive.profile.kits, nearMine, preparing,
+    ].join(',');
     if (previousUi === key) return;
     previousUi = key;
 
@@ -135,12 +142,17 @@
     byId('bag').classList.toggle('loaded', dive.pendingXp > 0);
     byId('shop').classList.toggle('ready', ready);
     byId('attack').classList.toggle('locked', dive.value('weapon') === 0);
+    byId('kit-count').textContent = dive.profile.kits;
+    byId('defuse').classList.toggle('ready', nearMine && dive.profile.kits > 0);
+    byId('defuse').setAttribute('aria-label', 'Обезвредить мину. Наборов ' + dive.profile.kits);
     let tip = '';
     if (dive.atSurface) {
-      if (current < maximum) tip = 'На поверхности · кислород восстанавливается';
+      if (preparing) tip = 'Вдох перед нырком';
+      else if (current < maximum) tip = 'На поверхности · кислород восстанавливается';
       else if (ready) tip = 'Доступно улучшение снаряжения';
       else if (dive.profile.haul.length === 0) tip = touchMode ? 'Джойстик вниз, чтобы нырнуть' : 'S или ↓, чтобы нырнуть';
-    } else if (dive.pendingXp > 0) tip = 'Всплыви, чтобы получить ОП';
+    } else if (nearMine && dive.profile.kits > 0) tip = touchMode ? 'Нажми «Наборы», чтобы обезвредить мину' : 'Нажми R, чтобы обезвредить мину';
+    else if (dive.pendingXp > 0) tip = 'Всплыви, чтобы получить ОП';
     byId('tip').textContent = tip;
   }
 
@@ -151,6 +163,7 @@
     resetControls();
     updateAmbience();
     panel.classList.toggle('map-panel', type === 'map');
+    panel.classList.toggle('shop-panel', type === 'shop');
     byId('close').hidden = type === 'end';
     overlay.inert = true;
     cover.inert = true;
@@ -181,15 +194,22 @@
       const button = row.querySelector('button');
       button.disabled = !canBuy;
       const maxed = cost === undefined;
-      const verb = item.id === 'weapon' && level === 0 ? 'Купить' : 'Улучшить';
+      const verb = ['weapon', 'insulation'].includes(item.id) && level === 0 ? 'Купить' : 'Улучшить';
       button.textContent = maxed ? 'Максимум' : verb + ' · ' + cost + ' ОП';
       button.setAttribute('aria-label', item.name + ' · ' + button.textContent);
       const shortfall = dive.atSurface && !maxed && !canBuy ? cost - dive.profile.xp : 0;
       row.querySelector('.shop-shortfall').textContent = shortfall ? 'Не хватает ' + shortfall + ' ОП' : '';
-      row.querySelector('.shop-description').textContent = item.id === 'air' && !maxed
-        ? 'Следующий запас · ' + item.values[level + 1] + ' с'
-        : item.copy;
+      const description = row.querySelector('.shop-description');
+      if (item.id === 'air' && !maxed) description.textContent = 'Следующий запас · ' + item.values[level + 1] + ' с';
+      else if (item.id === 'insulation' && !maxed) {
+        description.textContent = 'Следующий уровень · защита от ' + ['малых', 'пятнистых', 'гигантских'][level] + ' скатов';
+      } else description.textContent = item.copy;
     }
+    const kit = panelContent.querySelector('[data-upgrade="kit"]');
+    kit.querySelector('.shop-level').textContent = 'В запасе · ' + dive.profile.kits;
+    kit.querySelector('button').disabled = !dive.canBuyKit;
+    const missing = mineKitCost - dive.profile.xp;
+    kit.querySelector('.shop-shortfall').textContent = dive.atSurface && missing > 0 ? 'Не хватает ' + missing + ' ОП' : '';
   }
 
   function renderPanel() {
@@ -204,9 +224,11 @@
           ['Рывок', '<kbd>Shift</kbd>'],
           ['Гарпун', '<kbd>Space</kbd>'],
           ['Нож', '<kbd>F</kbd>'],
+          ['Обезвредить мину', '<kbd>R</kbd>'],
           ['Карта и снаряжение', '<kbd>M</kbd><kbd>E</kbd>'],
         ].map(([label, keys]) => '<div class="guide-line"><span>' + label + '</span><span class="guide-keys">' + keys + '</span></div>').join('') + '</div>'
         + '<p>Нож есть с начала игры и действует вблизи. Гарпун продаётся на поверхности. Для атаки повернись к хищнику джойстиком или клавишами плавания.</p>'
+        + '<p>Подплыви к мине и нажми «Наборы» или R. На одну мину уходит один набор. Чем крупнее электроскат, тем выше уровень защиты костюма нужен.</p>'
         + '<div class="panel-actions"><button class="primary" data-action="' + (started ? 'pause' : 'start') + '">' + (started ? 'Назад в меню паузы' : 'Погрузиться') + '</button></div>';
     } else if (panelType === 'pause') {
       title.textContent = 'Пауза';
@@ -224,13 +246,18 @@
           + '<div class="shop-progress"><span class="shop-level"></span><div class="levels" aria-hidden="true">'
           + '<i></i>'.repeat(item.costs.length) + '</div></div><div class="shop-purchase"><button type="button" data-buy="'
           + item.id + '"></button><span class="shop-shortfall"></span></div></div></article>'
-        ).join('') + '</div>';
+        ).join('') + '<article class="shop-row" data-upgrade="kit"><span class="shop-symbol">' + icon('kit')
+        + '</span><div class="shop-details"><h3>Набор для мин</h3><p>Обезвреживает одну мину.</p>'
+        + '<div class="shop-progress"><span class="shop-level"></span></div><div class="shop-purchase">'
+        + '<button type="button" data-buy="kit" aria-label="Купить набор для мин">Купить · ' + mineKitCost
+        + ' ОП</button><span class="shop-shortfall"></span></div></div></article></div>';
       updateShop();
     } else if (panelType === 'map') {
       title.textContent = 'Карта океана';
       kicker.textContent = dive.activeZone.name + ' · ' + dive.meters + ' м';
       panelContent.innerHTML = '<canvas class="map-frame" id="map-canvas" aria-label="Карта океана с положением дайвера и сокровищами"></canvas><div class="map-legend">'
-        + [{ plural: 'Ты здесь', color: '#e1f9a2' }, ...W.treasureTypes].map(item => '<span><i style="background:' + item.color + '"></i>' + item.plural + '</span>').join('') + '</div>';
+        + [{ plural: 'Ты здесь', color: '#e1f9a2' }, ...W.treasureTypes, { plural: 'Электроскаты', color: '#7c9ebc' }]
+          .map(item => '<span><i style="background:' + item.color + '"></i>' + item.plural + '</span>').join('') + '</div>';
       renderer.drawMap(byId('map-canvas'), dive);
     } else if (panelType === 'end') {
       title.textContent = 'Погружение окончено';
@@ -373,6 +400,7 @@
     }
     if (!event.repeat && event.code === 'KeyM') showPanel('map');
     if (!event.repeat && event.code === 'KeyE') showPanel('shop');
+    if (!event.repeat && event.code === 'KeyR') dive.defuseMine();
   });
   document.addEventListener('keyup', event => pressed.delete(event.code));
   window.addEventListener('blur', resetControls);
@@ -396,7 +424,7 @@
     if (button.hasAttribute('data-sound')) toggleSound();
     else if (button.dataset.action) action(button.dataset.action);
     else if (panelType === 'shop' && button.dataset.buy) {
-      if (dive.buy(button.dataset.buy)) {
+      if (button.dataset.buy === 'kit' ? dive.buyKit() : dive.buy(button.dataset.buy)) {
         updateShop();
         updateHud();
         if (button.disabled && document.activeElement === button) panel.focus({ preventScroll: true });
@@ -407,6 +435,7 @@
     byId(id).addEventListener('click', () => showPanel(type));
   }
   byId('start').addEventListener('click', start);
+  byId('defuse').addEventListener('click', () => { if (started && !panelType) dive.defuseMine(); });
   byId('close').addEventListener('click', hidePanel);
   modal.addEventListener('click', event => { if (event.target === modal && panelType !== 'end') hidePanel(); });
 

@@ -333,7 +333,7 @@
   function treasure(c, item, time) {
     const float = Math.sin(time * 1.8 + item.id * 1.3) * 3;
     const a = .24 + .08 * Math.sin(time * 2.6 + item.id);
-    const palette = ['255,150,120', '161,225,251', '255,198,101', '192,155,250'];
+    const palette = ['255,150,120', '161,225,251', '255,198,101', '192,155,250', '255,229,151'];
     c.save();
     c.translate(item.x, item.y + float);
     glow(c, 0, 0, 29 + item.type * 7, palette[item.type], a + item.type * .035);
@@ -354,12 +354,19 @@
       polygon(c, '#ffda81', [-13, -5], [-6, -12], [6, -12], [12, -5]);
       line(c, '#ffecab', 1.5, [-6, -9], [5, -9]);
       polygon(c, '#ffcf77', [-2, 1], [3, 1], [3, 6], [-2, 6]);
-    } else {
+    } else if (item.type === 3) {
       c.rotate(.21);
       polygon(c, '#ae88dd', [0,-19], [10,-9], [13,10], [0,18], [-12,9], [-10,-8]);
       polygon(c, '#d9bbf4', [0,-19], [10,-9], [4,10], [0,18], [-2,1]);
       polygon(c, '#735caa', [-12,9], [-2,1], [0,18]);
       line(c, '#efe6fb', 1.5, [-1,-11], [-3,-5], [2,-2], [3,5]);
+    } else {
+      c.rotate(-.22);
+      polygon(c, '#926b52', [-14, -14], [0, -23], [14, -14], [15, 11], [0, 21], [-15, 11]);
+      polygon(c, '#f5d88b', [-11, -13], [0, -19], [11, -13], [11, 9], [0, 17], [-11, 9]);
+      polygon(c, '#437e98', [-8,-9], [0,-15], [8,-9], [8,7], [0,13], [-8,7]);
+      polygon(c, '#a9e8e9', [0,-12], [5,-2], [0,8], [-5,-2]);
+      disc(c, 0, -2, 1.6, '#fbffd6');
     }
     const glint = .6 + Math.sin(time * 2.5 + item.id) * .35;
     line(c, rgba('250,255,235', glint), 1, [13, -14], [21, -14]);
@@ -392,15 +399,64 @@
     c.restore();
   }
 
+  function rayField(c, obj, electric, time) {
+    if (obj.charge <= 0 && obj.discharge <= 0) return;
+    const active = obj.discharge > 0;
+    const pulse = active ? obj.discharge / .38 : 1 - obj.charge / .65;
+    c.save();
+    c.translate(obj.x, obj.y);
+    c.beginPath();
+    c.arc(0, 0, electric.radius, 0, tau);
+    c.strokeStyle = rgba(active ? '164,227,255' : '246,197,127', .32 + pulse * .54);
+    c.lineWidth = active ? 3.5 : 2;
+    if (!active) c.setLineDash([7, 8]);
+    c.stroke();
+    if (active) {
+      glow(c, 0, 0, electric.radius, '157,218,255', pulse * .34);
+      for (let i = 0; i < 7; i++) {
+        const angle = i * tau / 7 + time * 2.5;
+        const points = [[0, 0]];
+        for (let j = 1; j <= 5; j++) {
+          const bend = angle + (W.seed(i * 20 + j) - .5) * .77;
+          const r = j / 5 * electric.radius;
+          points.push([Math.cos(bend) * r, Math.sin(bend) * r]);
+        }
+        line(c, rgba('193,239,255', pulse * .8), 1.8, ...points);
+      }
+    }
+    c.restore();
+  }
+
+  function ray(c, obj, species, wiggle) {
+    const spread = 32 + wiggle * 6;
+    line(c, '#486480', 3.4, [-14, 0], [-35, wiggle * 6], [-55, wiggle * 10], [-67, -4 + wiggle * 7]);
+    path(c, species.color, p => {
+      p.moveTo(22, 0);
+      p.bezierCurveTo(19, -10, -7, -12, -20, -spread);
+      p.bezierCurveTo(-36, -spread * .69, -29, -12, -22, 0);
+      p.bezierCurveTo(-29, 12, -36, spread * .69, -20, spread);
+      p.bezierCurveTo(-7, 12, 19, 10, 22, 0);
+    });
+    ellipse(c, -3, 0, 19, 9, 0, '#436884');
+    line(c, '#c4e4ed', 1.4, [-27, -spread * .62], [-19, -13], [9, -3], [9, 3], [-19, 13], [-27, spread * .62]);
+    for (const side of [-1, 1]) {
+      disc(c, 9, side * 4.3, 2, obj.charge > 0 ? '#ffc77b' : '#e0f3ee');
+      for (let i = 0; i < species.electric.level + 1; i++) disc(c, -9 - i * 4, side * (11 + i * 3.2), 1.3, '#c1e6e8');
+    }
+  }
+
   function animal(c, obj, time) {
     const species = W.predatorTypes[obj.type];
     const k = species.size / 31 * predatorScale;
     const wiggle = Math.sin(time * (obj.chasing ? 11 : 5.4) + obj.phase);
+    if (species.electric) rayField(c, obj, species.electric, time);
     c.save();
     c.translate(obj.x, obj.y);
     c.scale(obj.face * k, k);
     const body = obj.stagger ? '#ccaaa1' : species.color;
-    if (obj.type === 2) {
+    if (species.electric) {
+      ray(c, obj, species, wiggle);
+    } else if (obj.type === 2) {
       path(c, body, p => {
         p.moveTo(25,-9); p.quadraticCurveTo(35,-11,37,-1); p.lineTo(31,6);
         p.bezierCurveTo(4,10,-17,-8,-46,wiggle * 6); p.quadraticCurveTo(-26,-15,-4,-7);
@@ -424,14 +480,28 @@
       polygon(c, '#517487', [4,3], [-7,17], [11,12], [16,4]);
       for (let i = 0; i < 3; i++) line(c, '#3e6675', 1, [15 - i * 3, -3], [13 - i * 3, 3]);
     }
-    line(c, '#263842', 1.1, [24, 3], [34, 1]);
-    disc(c, 24, -4.5, 2.5, obj.chasing ? '#ffbc81' : '#e2eee0');
-    disc(c, 24.8, -4.4, 1.13, '#10212b');
+    if (!species.electric) {
+      line(c, '#263842', 1.1, [24, 3], [34, 1]);
+      disc(c, 24, -4.5, 2.5, obj.chasing ? '#ffbc81' : '#e2eee0');
+      disc(c, 24.8, -4.4, 1.13, '#10212b');
+    }
     if (obj.hp < species.hp) {
       line(c, '#192932', 3.9, [-15, -31], [15, -31]);
       line(c, '#ffb59a', 2.1, [-15, -31], [-15 + 30 * obj.hp / species.hp, -31]);
     }
     c.restore();
+  }
+
+  function crystals(c, x, y, number) {
+    glow(c, x, y - 30, 114, '98,170,220', .17);
+    for (let i = 0; i < 7; i++) {
+      const u = x + (W.seed(number + i * 3) - .5) * 139;
+      const rise = 22 + W.seed(number + i * 3 + 1) * 78;
+      const lean = (W.seed(number + i * 3 + 2) - .5) * 55;
+      polygon(c, '#295270', [u - 13, y], [u + lean - 10, y - rise + 15], [u + lean, y - rise], [u + lean + 11, y - rise + 11], [u + 13, y]);
+      polygon(c, '#547d9c', [u + lean, y - rise], [u + lean + 11, y - rise + 11], [u + 13, y], [u + 3, y]);
+      line(c, '#a6c4d3', 1.2, [u + lean, y - rise], [u + lean - 10, y - rise + 15], [u - 7, y - 13]);
+    }
   }
 
   function ruins(c, x, y) {
@@ -454,6 +524,7 @@
   const school = [
     [470, 112, 9], [1010, 94, 12], [1440, 317, 13], [2140, 211, 9], [2470, 430, 13],
     [2900, 813, 6], [3435, 610, 12], [3670, 885, 11], [3045, 1390, 10], [2524, 1665, 7],
+    [4640, 750, 12], [5370, 410, 15], [6200, 810, 10], [6940, 630, 12], [5540, 1670, 10], [5850, 2200, 7],
   ];
 
   class Renderer {
@@ -497,13 +568,10 @@
       c.setTransform(scale, 0, 0, scale, -left * scale, -top * scale);
 
       const sea = c.createLinearGradient(0, -235, 0, W.height);
-      sea.addColorStop(0, '#53898f');
-      sea.addColorStop(.091, '#447c82');
-      sea.addColorStop(.092, '#1d656b');
-      sea.addColorStop(.14, '#246d72');
-      sea.addColorStop(.28, '#164b59');
-      sea.addColorStop(.57, '#102e44');
-      sea.addColorStop(1, '#0d1a31');
+      for (const [depth, color] of [
+        [-235, '#53898f'], [-4, '#447c82'], [0, '#1d656b'], [125, '#246d72'],
+        [470, '#164b59'], [1210, '#102e44'], [2300, '#0d1a31'], [W.height, '#181930'],
+      ]) sea.addColorStop((depth + 235) / (W.height + 235), color);
       c.fillStyle = sea;
       c.fillRect(left - 1, top - 1, dw + 2, dh + 2);
 
@@ -518,10 +586,10 @@
       if (dive.atSurface) splash(c, p.x, 1, time);
 
       for (const item of W.treasures) {
-        if (visible(item.x, item.y) && !dive.haul.includes(item.id) && !dive.profile.haul.includes(item.id)) treasure(c, item, time);
+        if (visible(item.x, item.y) && dive.treasureAvailable(item)) treasure(c, item, time);
       }
       for (const obj of dive.mines) if (obj.live && visible(obj.x, obj.y)) mine(c, obj, time);
-      const nearbyPredators = dive.predators.filter(obj => !obj.dead && visible(obj.x, obj.y, 90));
+      const nearbyPredators = dive.predators.filter(obj => !obj.dead && visible(obj.x, obj.y, 166));
       if (nearbyPredators.length) {
         c.save();
         c.clip(waterPath, 'evenodd');
@@ -620,8 +688,14 @@
       }
 
       if (bottom > 1740) {
-        for (const [x, y] of [[1545, 2045], [2275, 2130], [3978, 1914], [1945, 1925]]) {
+        for (const [x, y] of [[1545, 2045], [2275, 2130], [3978, 1914], [1945, 1925], [4445, 2150], [6775, 2910], [4430, 3250], [6370, 3280]]) {
           if (x < right + 100 && x > left - 100 && y < bottom + 100 && y > top - 100) ruins(c, x, y);
+        }
+        const deposits = [[4740, 2560], [5010, 2770], [5400, 2720], [5580, 2850], [5800, 3020],
+          [6090, 3185], [6455, 3280], [6340, 2665], [6830, 2920], [4530, 3275]];
+        for (let i = 0; i < deposits.length; i++) {
+          const [x, y] = deposits[i];
+          if (x < right + 120 && x > left - 120 && y < bottom + 120 && y > top - 100) crystals(c, x, y, i * 86);
         }
       }
 
@@ -654,9 +728,10 @@
 
     drawMap(canvas, dive) {
       const c = canvas.getContext('2d');
-      canvas.width = 1040;
-      canvas.height = 576;
-      c.setTransform(.25, 0, 0, .25, 0, 0);
+      canvas.width = 1200;
+      const scale = canvas.width / W.width;
+      canvas.height = Math.round(W.height * scale);
+      c.setTransform(scale, 0, 0, scale, 0, 0);
       c.fillStyle = '#173a4b';
       c.fillRect(0, 0, W.width, W.height);
       c.fillStyle = '#0b202d';
@@ -664,9 +739,29 @@
       c.strokeStyle = '#355568';
       c.lineWidth = 6;
       c.stroke(rockPath);
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillStyle = '#cfe8e9';
+      c.strokeStyle = '#102530';
+      c.lineWidth = 17;
+      c.lineJoin = 'round';
+      c.font = '700 136px Manrope, sans-serif';
+      for (const zone of W.zones) {
+        c.strokeText(zone.name, zone.x, zone.y);
+        c.fillText(zone.name, zone.x, zone.y);
+      }
+      for (const obj of dive.predators) {
+        const electric = W.predatorTypes[obj.type].electric;
+        if (obj.dead || !electric) continue;
+        c.beginPath();
+        c.arc(obj.x, obj.y, electric.radius, 0, tau);
+        c.strokeStyle = '#7c9ebc';
+        c.lineWidth = 6;
+        c.stroke();
+      }
       for (const item of W.treasures) {
-        if (dive.profile.haul.includes(item.id)) continue;
-        disc(c, item.x, item.y, 11, W.treasureTypes[item.type].color);
+        if (!dive.treasureAvailable(item)) continue;
+        disc(c, item.x, item.y, item.type === 4 ? 24 : 15, W.treasureTypes[item.type].color);
       }
       c.strokeStyle = '#dff6a5';
       c.lineWidth = 6;
