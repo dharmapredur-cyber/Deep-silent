@@ -2,8 +2,11 @@
   'use strict';
 
   const W = window.DepthWorld;
+  const { knifeReach, knifeArc, knifeDuration } = window.DepthSimulation;
   const tau = Math.PI * 2;
   const chunkSize = 384;
+  const diverScale = 1.48;
+  const predatorScale = 1.38;
   const rockPath = new Path2D();
   const edges = new Map();
 
@@ -47,6 +50,10 @@
       rockPath.closePath();
     }
   }
+
+  const waterPath = new Path2D();
+  waterPath.rect(-1000, -1000, W.width + 2000, W.height + 2000);
+  waterPath.addPath(rockPath);
 
   function polygon(c, color, ...points) {
     c.beginPath();
@@ -256,7 +263,7 @@
     if (surface && moving < .15) angle = p.face > 0 ? .36 : Math.PI - .36;
     if (Math.cos(angle) < 0) flip = true;
     c.rotate(angle);
-    if (flip) c.scale(1, -1);
+    c.scale(diverScale, flip ? -diverScale : diverScale);
 
     c.lineCap = 'round';
     c.lineJoin = 'round';
@@ -282,10 +289,35 @@
     ellipse(c, 19.5, -4.2, 5.5, 5.4, 0, '#e2ae86');
     polygon(c, '#a8ecdc', [18, -8], [25, -7], [26, -4], [19, -3]);
     line(c, '#effff0', 1, [19, -7], [23, -6.8]);
-    if (dive.value('weapon')) {
+    if (dive.knifeSlash) {
+      line(c, '#2b555a', 2.5, [22, 2], [28, 2]);
+      polygon(c, '#e0f1de', [27, .2], [35, -1.6], [32, 3], [27, 3.4]);
+    } else if (dive.value('weapon')) {
       line(c, '#b1d1c7', 2, [8, 6], [32, 5]);
       polygon(c, '#e5f2c7', [29, 2.4], [34, 4.9], [29, 7.3]);
     }
+    c.restore();
+  }
+
+  function knifeSwing(c, p, slash) {
+    const progress = 1 - slash.remaining / knifeDuration;
+    const leading = -knifeArc + knifeArc * 2 * Math.min(1, progress * 1.65 + .20);
+    const trailing = Math.max(-knifeArc, leading - .72);
+    c.save();
+    c.translate(p.x, p.y);
+    c.rotate(slash.angle);
+    c.globalAlpha = (1 - progress) * .9;
+    c.beginPath();
+    c.arc(0, 0, knifeReach, trailing, leading);
+    c.strokeStyle = '#dcf4dc';
+    c.lineWidth = 3.2;
+    c.lineCap = 'round';
+    c.stroke();
+    c.beginPath();
+    c.arc(0, 0, knifeReach - 7, trailing + .03, leading);
+    c.strokeStyle = '#a7dfd5';
+    c.lineWidth = 1.5;
+    c.stroke();
     c.restore();
   }
 
@@ -362,7 +394,7 @@
 
   function animal(c, obj, time) {
     const species = W.predatorTypes[obj.type];
-    const k = species.size / 31;
+    const k = species.size / 31 * predatorScale;
     const wiggle = Math.sin(time * (obj.chasing ? 11 : 5.4) + obj.phase);
     c.save();
     c.translate(obj.x, obj.y);
@@ -489,7 +521,13 @@
         if (visible(item.x, item.y) && !dive.haul.includes(item.id) && !dive.profile.haul.includes(item.id)) treasure(c, item, time);
       }
       for (const obj of dive.mines) if (obj.live && visible(obj.x, obj.y)) mine(c, obj, time);
-      for (const obj of dive.predators) if (!obj.dead && visible(obj.x, obj.y)) animal(c, obj, time);
+      const nearbyPredators = dive.predators.filter(obj => !obj.dead && visible(obj.x, obj.y, 90));
+      if (nearbyPredators.length) {
+        c.save();
+        c.clip(waterPath, 'evenodd');
+        for (const obj of nearbyPredators) animal(c, obj, time);
+        c.restore();
+      }
       for (const shot of dive.shots) {
         c.save();
         c.translate(shot.x, shot.y);
@@ -515,7 +553,11 @@
         c.fillRect(left, Math.max(top, 0), dw, bottom - Math.max(top, 0));
         glow(c, p.x, p.y, 126, '209,231,189', fog * .12);
       }
+      c.save();
+      if (p.y > 20 && !W.fits(p.x, p.y, 78)) c.clip(waterPath, 'evenodd');
       diver(c, p, dive);
+      if (dive.knifeSlash) knifeSwing(c, p, dive.knifeSlash);
+      c.restore();
     }
 
     environment(c, left, top, right, bottom, time) {

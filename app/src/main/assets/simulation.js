@@ -3,11 +3,14 @@
 
   const W = window.DepthWorld;
   const storageKey = 'quiet-depth-profile-v1';
+  const knifeReach = 56;
+  const knifeArc = .91;
+  const knifeDuration = .20;
   const upgrades = [
-    { id: 'air', icon: 'air', name: 'Запас воздуха', costs: [85, 175, 315], values: [28, 36, 46, 58], unit: ' с', copy: 'Больше времени на глубине.' },
+    { id: 'air', icon: 'air', name: 'Запас воздуха', costs: [85, 175, 315], values: [28, 36, 46, 58], copy: 'Больше времени на глубине.' },
     { id: 'speed', icon: 'bolt', name: 'Скорость', costs: [100, 215, 340], values: [218, 248, 279, 313], copy: 'Быстрее гребок и рывок.' },
-    { id: 'life', icon: 'heart', name: 'Запас жизней', costs: [135, 275, 420], values: [3, 4, 5, 6], unit: ' жизней', copy: 'Помогает пережить столкновения.' },
-    { id: 'weapon', icon: 'spear', name: 'Гарпун', costs: [130, 280, 440], values: [0, 1, 2, 3], copy: 'Защита от хищников.' },
+    { id: 'life', icon: 'heart', name: 'Запас жизней', costs: [135, 275, 420], values: [3, 4, 5, 6], copy: 'Помогает пережить столкновения.' },
+    { id: 'weapon', icon: 'spear', name: 'Гарпун', costs: [130, 280, 440], values: [0, 1, 2, 3], copy: 'Больше урона на расстоянии.' },
   ];
 
   function load() {
@@ -27,6 +30,14 @@
       bestDepth: Math.max(0, Math.floor(Number(saved.bestDepth) || 0)),
       foundZones: Array.isArray(saved.foundZones) ? saved.foundZones.filter(id => W.zones.some(zone => zone.id === id)) : [],
       muted: saved.muted === true,
+    };
+  }
+
+  function createPredator([x, y, type], id, dead = false) {
+    return {
+      id, x, y, homeX: x, homeY: y, type, hp: W.predatorTypes[type].hp,
+      dead, face: id % 2 ? 1 : -1, chasing: false, stagger: 0, phase: id * 2.399,
+      strokeDistance: W.seed(id + 18) * 58,
     };
   }
 
@@ -55,21 +66,23 @@
         lives: this.value('life'), air: this.value('air'), stamina: 1, invulnerable: 0,
       };
       this.haul = [];
-      this.haulXp = 0;
+      this.defeated = [];
+      this.pendingXp = 0;
       this.effects = [];
       this.shots = [];
       this.cooldown = 0;
+      this.knifeCooldown = 0;
+      this.knifeSlash = null;
+      this.strokeDistance = 0;
       this.impact = 0;
       this.airNotice = false;
       this.sprint = false;
       this.phase = 0;
       this.activeZone = W.zone(this.player.x, this.player.y);
       this.mines = W.mineSites.map(([x, y], id) => ({ x, y, id, live: true, fuse: 0 }));
-      this.predators = W.predatorSites.map(([x, y, type], id) => ({
-        id, x, y, homeX: x, homeY: y, type, hp: W.predatorTypes[type].hp,
-        dead: this.profile.gonePredators.includes(id), face: id % 2 ? 1 : -1,
-        chasing: false, stagger: 0, phase: id * 2.399,
-      }));
+      this.predators = W.predatorSites.map((site, id) =>
+        createPredator(site, id, this.profile.gonePredators.includes(id))
+      );
     }
 
     respawn() {
@@ -81,24 +94,33 @@
         this.shots = [];
         this.impact = 0;
         this.cooldown = 0;
+        this.knifeCooldown = 0;
+        this.knifeSlash = null;
+        this.strokeDistance = 0;
         this.airNotice = false;
         this.sprint = false;
         this.activeZone = W.zone(this.player.x, this.player.y);
       }
     }
 
+    upgradeOffer(item) {
+      const level = this.profile.levels[item.id];
+      const cost = item.costs[level];
+      const canBuy = cost !== undefined && this.atSurface && this.profile.xp >= cost;
+      return { level, cost, canBuy };
+    }
+
     buy(id) {
       const item = upgrades.find(candidate => candidate.id === id);
-      if (!this.atSurface || !item) return false;
-      const level = this.profile.levels[id];
-      const cost = item.costs[level];
-      if (cost === undefined || this.profile.xp < cost) return false;
-      this.profile.levels[id]++;
+      if (!item) return false;
+      const { level, cost, canBuy } = this.upgradeOffer(item);
+      if (!canBuy) return false;
+      this.profile.levels[id] = level + 1;
       this.profile.xp -= cost;
       if (id === 'air') this.player.air += item.values[level + 1] - item.values[level];
       if (id === 'life') this.player.lives++;
       this.save();
-      this.announce('upgrade', item.name + ' улучшен' + ({ air: '', speed: 'а', life: '', weapon: '' }[id]));
+      this.announce('upgrade', item.name + ' · уровень ' + (level + 1));
       return true;
     }
 
@@ -113,19 +135,22 @@
     }
 
     finish(cause) {
-      this.save();
-      this.end({ cause, lost: this.haulXp, lives: this.player.lives });
+      const lost = this.pendingXp;
+      for (const id of this.defeated) this.predators[id] = createPredator(W.predatorSites[id], id);
       this.haul = [];
-      this.haulXp = 0;
+      this.defeated = [];
+      this.pendingXp = 0;
+      this.save();
+      this.end({ cause, lost, lives: this.player.lives });
     }
 
-    damage(amount, source) {
+    damage(amount, source, cue = 'damage') {
       const p = this.player;
       if (p.invulnerable > 0) return;
       p.lives = Math.max(0, p.lives - amount);
       p.invulnerable = 1.35;
       this.impact = .65;
-      this.announce('damage', source);
+      this.announce(cue, source);
       if (p.lives === 0) this.finish(source);
     }
 
@@ -134,6 +159,10 @@
       else if ('vx' in body) body.vx = 0;
       if (W.fits(body.x, body.y + dy, radius)) body.y += dy;
       else if ('vy' in body) body.vy = 0;
+    }
+
+    aim(x, y) {
+      return Math.hypot(x, y) > .15 ? Math.atan2(y, x) : this.player.angle;
     }
 
     shoot(x, y) {
@@ -145,17 +174,74 @@
         return;
       }
       const p = this.player;
-      const angle = Math.hypot(x, y) > .15 ? Math.atan2(y, x) : p.angle;
+      const angle = this.aim(x, y);
       this.shots.push({ x: p.x + Math.cos(angle) * 12, y: p.y + Math.sin(angle) * 12,
         angle, ttl: .45 + weapon * .08, damage: weapon });
       this.cooldown = .76 - weapon * .1;
       this.announce('shot');
     }
 
+    swingKnife(x, y) {
+      if (this.atSurface || this.knifeCooldown > 0) return;
+      const p = this.player;
+      const angle = this.aim(x, y);
+      this.knifeCooldown = .46;
+      this.knifeSlash = { angle, remaining: knifeDuration };
+      this.announce('knife');
+
+      const aimX = Math.cos(angle);
+      const aimY = Math.sin(angle);
+      const arcCos = Math.cos(knifeArc);
+      let target;
+      let nearest = Infinity;
+      for (const predator of this.predators) {
+        if (predator.dead) continue;
+        const dx = predator.x - p.x;
+        const dy = predator.y - p.y;
+        const range = Math.hypot(dx, dy);
+        if (range >= nearest || range > knifeReach + W.predatorTypes[predator.type].size * .55
+          || dx * aimX + dy * aimY < range * arcCos
+          || !W.lineClear(p.x, p.y, predator.x, predator.y)) continue;
+        target = predator;
+        nearest = range;
+      }
+      if (target) this.hitPredator(target, 1, target.x, target.y);
+    }
+
+    hitPredator(predator, amount, x, y) {
+      predator.hp -= amount;
+      predator.stagger = .22;
+      this.spark(x, y, '#f6bf88', 9);
+      if (predator.hp > 0) return;
+      const info = W.predatorTypes[predator.type];
+      predator.dead = true;
+      this.defeated.push(predator.id);
+      this.pendingXp += info.xp;
+      this.announce('kill', info.name + ' · ' + info.xp + ' ОП к зачислению');
+    }
+
+    bankRewards() {
+      this.shots = [];
+      this.knifeSlash = null;
+      const hasTreasure = this.haul.length > 0;
+      if (this.pendingXp > 0) {
+        this.profile.xp += this.pendingXp;
+        this.profile.haul.push(...this.haul);
+        this.profile.gonePredators.push(...this.defeated);
+        this.announce('bank', '+' + this.pendingXp + ' ОП зачислено');
+        this.spark(this.player.x, 2, '#dcfc93', 22);
+        this.haul = [];
+        this.defeated = [];
+        this.pendingXp = 0;
+        if (hasTreasure && this.profile.haul.length === W.treasures.length) this.announce('milestone', 'Все сокровища подняты!');
+      }
+      this.save();
+    }
+
     step(dt, controls) {
       this.phase += dt;
       const p = this.player;
-      const { x, y, boost, attack } = controls;
+      const { x, y, boost, attack, knife } = controls;
       const norm = Math.max(1, Math.hypot(x, y));
       const ux = x / norm;
       const uy = y / norm;
@@ -167,6 +253,11 @@
       p.invulnerable = Math.max(0, p.invulnerable - dt);
       this.impact = Math.max(0, this.impact - dt);
       this.cooldown = Math.max(0, this.cooldown - dt);
+      this.knifeCooldown = Math.max(0, this.knifeCooldown - dt);
+      if (this.knifeSlash) {
+        this.knifeSlash.remaining -= dt;
+        if (this.knifeSlash.remaining <= 0) this.knifeSlash = null;
+      }
 
       const blend = 1 - Math.exp(-dt * (steering > .05 ? 8 : 6));
       p.vx = W.mix(p.vx, ux * speed, blend);
@@ -178,24 +269,25 @@
       }
       if (Math.abs(ux) > .12) p.face = Math.sign(ux);
 
+      const oldX = p.x;
+      const oldY = p.y;
       this.move(p, p.vx * dt, p.vy * dt, 11);
       p.y = Math.max(-13, p.y);
       if (p.y === -13 && p.vy < 0) p.vy = 0;
       if (this.atSurface) {
-        if (underwater) this.save();
-        if (this.haul.length) {
-          this.profile.xp += this.haulXp;
-          this.profile.haul.push(...this.haul);
-          this.announce('bank', '+' + this.haulXp + ' ОП · добыча поднята');
-          this.spark(p.x, p.y, '#dcfc93', 22);
-          this.haul = [];
-          this.haulXp = 0;
-          this.save();
-          if (this.profile.haul.length === W.treasures.length) this.announce('milestone', 'Все сокровища подняты!');
+        if (underwater) {
+          this.announce('surface');
+          this.spark(p.x, 0, '#b6eee4', 16, 87);
+          this.bankRewards();
         }
         p.air = Math.min(this.value('air'), p.air + 7.4 * dt);
         this.airNotice = false;
       } else {
+        if (!underwater) {
+          this.announce('dive-in');
+          this.spark(p.x, 1, '#b6eee4', 19, 95);
+          this.strokeDistance = 0;
+        }
         p.air = Math.max(0, p.air - (this.sprint ? 1.61 : 1) * dt);
         this.profile.bestDepth = Math.max(this.meters, this.profile.bestDepth);
         if (p.air === 0) {
@@ -209,6 +301,11 @@
         }
         if (this.sprint && Math.random() < 20 * dt) {
           this.spark(p.x - Math.cos(p.angle) * 19, p.y - Math.sin(p.angle) * 19, '#a0edea', 1, 26);
+        }
+        this.strokeDistance += Math.hypot(p.x - oldX, p.y - oldY);
+        if (this.strokeDistance >= (this.sprint ? 102 : 124)) {
+          this.strokeDistance = 0;
+          this.announce(this.sprint ? 'boost-swim' : 'swim');
         }
       }
 
@@ -228,9 +325,9 @@
             || this.profile.haul.includes(item.id) || !W.lineClear(p.x, p.y, item.x, item.y)) continue;
           const info = W.treasureTypes[item.type];
           this.haul.push(item.id);
-          this.haulXp += info.xp;
+          this.pendingXp += info.xp;
           this.spark(item.x, item.y, info.color, 15);
-          this.announce('find', info.name + ' · +' + info.xp + ' ОП', info.color);
+          this.announce('find', info.name + ' · ' + info.xp + ' ОП к зачислению', info.color);
         }
       }
 
@@ -241,11 +338,13 @@
         if (distance < 31 && W.lineClear(mine.x, mine.y, p.x, p.y)) {
           mine.live = false;
           this.spark(mine.x, mine.y, '#fcb17b', 36, 220);
-          this.damage(2, 'Взрыв мины');
+          this.announce('mine');
+          this.damage(2, 'Взрыв мины', 'mine-hit');
           if (!p.lives) return;
         }
       }
       if (attack) this.shoot(ux, uy);
+      if (knife) this.swingKnife(ux, uy);
       this.updatePredators(dt);
       if (!p.lives) return;
       this.updateShots(dt);
@@ -275,7 +374,20 @@
         if (Math.abs(targetX - predator.x) > 5) predator.face = Math.sign(targetX - predator.x);
         const speed = predator.stagger > 0 ? -40 : (predator.chasing ? info.chase : info.patrol);
         const step = Math.min(Math.abs(speed) * dt, Math.hypot(targetX - predator.x, targetY - predator.y)) * Math.sign(speed);
+        const oldX = predator.x;
+        const oldY = predator.y;
         this.move(predator, Math.cos(angle) * step, Math.sin(angle) * step, Math.min(17, info.size * .62));
+        if (range < 280 && predator.y > 2) {
+          predator.strokeDistance += Math.hypot(predator.x - oldX, predator.y - oldY);
+          if (predator.strokeDistance >= 93) {
+            predator.strokeDistance = 0;
+            const proximity = 1 - range / 280;
+            const pan = W.clamp((predator.x - p.x) / 230, -.9, .9);
+            this.announce('predator-swim', null, null, {
+              volume: proximity * (predator.chasing ? 1 : .65), pan,
+            });
+          }
+        }
         if (predator.chasing && range < 10 + info.size * .67) {
           this.damage(info.damage, info.name);
           predator.stagger = .55;
@@ -298,16 +410,7 @@
           const info = W.predatorTypes[predator.type];
           if (Math.hypot(shot.x - predator.x, shot.y - predator.y) > info.size) continue;
           shot.ttl = 0;
-          predator.hp -= shot.damage;
-          predator.stagger = .22;
-          this.spark(shot.x, shot.y, '#f6bf88', 9);
-          if (predator.hp <= 0) {
-            predator.dead = true;
-            this.profile.gonePredators.push(predator.id);
-            this.profile.xp += info.xp;
-            this.save();
-            this.announce('kill', info.name + ' · +' + info.xp + ' ОП');
-          }
+          this.hitPredator(predator, shot.damage, shot.x, shot.y);
           break;
         }
       }
@@ -315,5 +418,5 @@
     }
   }
 
-  window.DepthSimulation = { Dive, upgrades };
+  window.DepthSimulation = { Dive, upgrades, knifeReach, knifeArc, knifeDuration };
 })();

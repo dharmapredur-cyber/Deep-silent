@@ -3,6 +3,7 @@ package com.silentdepth.game;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.graphics.Color;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -22,6 +23,7 @@ public final class MainActivity extends Activity {
     @SuppressLint("SetJavaScriptEnabled")
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setVolumeControlStream(AudioManager.STREAM_MUSIC);
         game = new WebView(this);
         game.setBackgroundColor(Color.rgb(7, 26, 36));
         game.setOverScrollMode(View.OVER_SCROLL_NEVER);

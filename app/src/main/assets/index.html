@@ -9,6 +9,7 @@
   <script defer src="world.js"></script>
   <script defer src="simulation.js"></script>
   <script defer src="renderer.js"></script>
+  <script defer src="audio.js"></script>
   <script defer src="game.js"></script>
 </head>
 <body>
@@ -33,6 +34,7 @@
           <span class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>Плыть</span>
           <span class="keys"><kbd>Shift</kbd></span><span>Рывок</span>
           <span class="keys"><kbd>Space</kbd></span><span>Гарпун</span>
+          <span class="keys"><kbd>F</kbd></span><span>Нож</span>
         </div>
         <div class="cover-touch"><span data-icon="move"></span><span>Джойстик для плавания</span></div>
         <span class="cover-status" id="cover-status" hidden></span>
@@ -66,12 +68,13 @@
       <div class="game-footer">
         <div class="location"><span data-icon="pin"></span><span id="zone">Зелёная бухта</span></div>
         <div class="surface-tip" id="tip"></div>
-        <div class="bag" id="bag" title="Добыча начисляется при всплытии"><span data-icon="bag"></span><span id="bag-text">Добыча 0 ОП</span></div>
+        <div class="bag" id="bag" title="Опыт за находки и победы начисляется при всплытии"><span data-icon="bag"></span><span id="bag-text">0 ОП к зачислению</span></div>
       </div>
       <div class="touch-controls">
         <div id="joystick" class="joystick" aria-label="Джойстик плавания"><span data-icon="move"></span><div id="knob" class="knob"></div></div>
         <div class="touch-actions">
           <button class="touch-button" id="attack" type="button" aria-label="Выстрелить гарпуном"><span data-icon="spear"></span><span>Гарпун</span></button>
+          <button class="touch-button" id="knife" type="button" aria-label="Ударить ножом"><span data-icon="knife"></span><span>Нож</span></button>
           <button class="touch-button boost" id="boost" type="button" aria-label="Ускориться"><span data-icon="bolt"></span><span>Рывок</span><i id="stamina"></i></button>
         </div>
       </div>

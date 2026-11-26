@@ -14,6 +14,7 @@
     heart: '<path d="M12 20 4.8 13a4.5 4.5 0 0 1 6.4-6.3l.8.9.8-.9a4.5 4.5 0 0 1 6.4 6.3Z"/>',
     bolt: '<path d="m13.5 2-9 12H11l-1 8 9.5-12H13z"/>',
     spear: '<path d="m4 20 13-13m-4 0 7-3-3 7M4 15l5 5"/>',
+    knife: '<path d="m4 20 5-5m-2-2 4 4m-1-3 2.5-6L21 3l-3 8.5L12 16"/>',
     map: '<path d="m3 6 6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14m6-12v14"/>',
     gear: '<path d="M4 7h16M4 12h16M4 17h16"/><path d="M8 5v4m8 1v4m-5 1v4" stroke-width="3"/>',
     pause: '<path d="M9 5v14m6-14v14" stroke-width="2.3"/>',
@@ -24,8 +25,7 @@
   };
   const icon = name => '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round">' + icons[name] + '</svg>';
 
-  let audio;
-  let ambience;
+  const audio = new window.DepthAudio();
   let started = false;
   let panelType = '';
   let previousFocus;
@@ -36,7 +36,7 @@
   let previousHearts = '';
   const pressed = new Set();
   const stick = { x: 0, y: 0, pointer: null };
-  const hold = { boost: false, attack: false };
+  const hold = { boost: false, attack: false, knife: false };
   const cover = byId('cover');
   const overlay = byId('overlay');
   const modal = byId('modal');
@@ -50,62 +50,8 @@
   if (touchMode) document.body.classList.add('touch-mode');
   for (const element of document.querySelectorAll('[data-icon]')) element.innerHTML = icon(element.dataset.icon);
 
-  function unlockAudio() {
-    if (dive.profile.muted) return;
-    try {
-      if (!audio) {
-        const Context = window.AudioContext || window.webkitAudioContext;
-        if (!Context) return;
-        audio = new Context();
-        const wash = audio.createBufferSource();
-        const buffer = audio.createBuffer(1, audio.sampleRate * 4, audio.sampleRate);
-        const data = buffer.getChannelData(0);
-        let previous = 0;
-        for (let i = 0; i < data.length; i++) {
-          previous = (previous + (Math.random() * 2 - 1) * .015) / 1.015;
-          data[i] = previous * Math.min(1, i / 1400, (data.length - i) / 1400);
-        }
-        const low = audio.createBiquadFilter();
-        low.type = 'lowpass';
-        low.frequency.value = 690;
-        ambience = audio.createGain();
-        ambience.gain.value = 0;
-        wash.buffer = buffer;
-        wash.loop = true;
-        wash.connect(low).connect(ambience).connect(audio.destination);
-        wash.start();
-      }
-      void audio.resume().catch(() => {});
-      updateAmbience();
-    } catch { /* Audio is optional on WebViews without the Web Audio API. */ }
-  }
   function updateAmbience() {
-    if (!audio || !ambience) return;
-    const volume = started && !panelType && !dive.profile.muted && !document.hidden ? .28 : 0;
-    ambience.gain.setTargetAtTime(volume, audio.currentTime, .12);
-  }
-  function tone(kind) {
-    if (!audio || dive.profile.muted) return;
-    const cues = {
-      find: [510, 786, .20], bank: [392, 698, .39], damage: [138, 42, .27],
-      warning: [275, 222, .29], shot: [190, 82, .10], kill: [452, 612, .23],
-      upgrade: [390, 620, .24], zone: [280, 410, .44], milestone: [550, 880, .49],
-    };
-    const cue = cues[kind];
-    if (!cue) return;
-    const [from, to, duration] = cue;
-    const start = audio.currentTime;
-    const oscillator = audio.createOscillator();
-    const gain = audio.createGain();
-    oscillator.type = kind === 'damage' ? 'triangle' : 'sine';
-    oscillator.frequency.setValueAtTime(from, start);
-    oscillator.frequency.exponentialRampToValueAtTime(to, start + duration * .77);
-    gain.gain.setValueAtTime(.001, start);
-    gain.gain.exponentialRampToValueAtTime(kind === 'warning' ? .105 : .12, start + .024);
-    gain.gain.exponentialRampToValueAtTime(.001, start + duration);
-    oscillator.connect(gain).connect(audio.destination);
-    oscillator.start(start);
-    oscillator.stop(start + duration + .02);
+    audio.mix(started && !panelType, dive.profile.muted || document.hidden);
   }
   function updateSoundButtons() {
     document.querySelectorAll('[data-sound]').forEach(button => {
@@ -117,13 +63,13 @@
   function toggleSound() {
     dive.profile.muted = !dive.profile.muted;
     dive.save();
-    if (!dive.profile.muted) unlockAudio();
     updateAmbience();
+    if (!dive.profile.muted) audio.unlock();
     updateSoundButtons();
   }
 
-  function announce(kind, message, color) {
-    tone(kind);
+  function announce(kind, message, color, sound) {
+    audio.play(kind, sound);
     if (!message) return;
     const toast = document.createElement('div');
     toast.className = 'toast';
@@ -145,7 +91,7 @@
     cover.inert = true;
     renderer.snap(dive.player);
     hidePanel();
-    unlockAudio();
+    audio.unlock();
     updateHud();
   }
 
@@ -162,14 +108,11 @@
     const current = Math.ceil(p.air);
     const lives = dive.value('life');
     const low = p.air < 7;
-    const ready = dive.atSurface && upgrades.some(upgrade => {
-      const cost = upgrade.costs[dive.profile.levels[upgrade.id]];
-      return cost !== undefined && dive.profile.xp >= cost;
-    });
+    const ready = upgrades.some(upgrade => dive.upgradeOffer(upgrade).canBuy);
     byId('air-fill').style.transform = 'scaleX(' + Math.max(0, p.air / maximum) + ')';
     byId('stamina').style.transform = 'scaleX(' + p.stamina + ')';
     byId('edge-signal').style.opacity = Math.max(dive.impact * .70, low ? .14 + Math.sin(dive.phase * 6) * .055 : 0);
-    const key = [current, maximum, dive.meters, dive.profile.xp, p.lives, lives, dive.activeZone.id, dive.haulXp, ready, dive.atSurface, low, dive.value('weapon')].join(',');
+    const key = [current, maximum, dive.meters, dive.profile.xp, p.lives, lives, dive.activeZone.id, dive.pendingXp, ready, dive.atSurface, low, dive.value('weapon')].join(',');
     if (previousUi === key) return;
     previousUi = key;
 
@@ -188,8 +131,8 @@
         '<span class="' + (i < p.lives ? '' : 'empty') + '">' + icon('heart') + '</span>').join('');
     }
     byId('zone').textContent = dive.activeZone.name;
-    byId('bag-text').textContent = 'Добыча ' + dive.haulXp + ' ОП';
-    byId('bag').classList.toggle('loaded', dive.haulXp > 0);
+    byId('bag-text').textContent = dive.pendingXp + ' ОП к зачислению';
+    byId('bag').classList.toggle('loaded', dive.pendingXp > 0);
     byId('shop').classList.toggle('ready', ready);
     byId('attack').classList.toggle('locked', dive.value('weapon') === 0);
     let tip = '';
@@ -197,7 +140,7 @@
       if (current < maximum) tip = 'На поверхности · кислород восстанавливается';
       else if (ready) tip = 'Доступно улучшение снаряжения';
       else if (dive.profile.haul.length === 0) tip = touchMode ? 'Джойстик вниз, чтобы нырнуть' : 'S или ↓, чтобы нырнуть';
-    } else if (dive.haulXp > 0) tip = 'Всплыви, чтобы получить ОП';
+    } else if (dive.pendingXp > 0) tip = 'Всплыви, чтобы получить ОП';
     byId('tip').textContent = tip;
   }
 
@@ -225,6 +168,28 @@
     cover.inert = started;
     if (hadPanel && previousFocus && previousFocus.isConnected && !previousFocus.closest('[hidden]')) previousFocus.focus();
     updateAmbience();
+    if (hadPanel && started) audio.unlock();
+  }
+
+  function updateShop() {
+    byId('panel-kicker').textContent = dive.profile.xp + ' ОП доступно';
+    for (const item of upgrades) {
+      const row = panelContent.querySelector('[data-upgrade="' + item.id + '"]');
+      const { level, cost, canBuy } = dive.upgradeOffer(item);
+      row.querySelector('.shop-level').textContent = 'Уровень ' + level + ' из ' + item.costs.length;
+      row.querySelectorAll('.levels i').forEach((dot, i) => dot.classList.toggle('filled', i < level));
+      const button = row.querySelector('button');
+      button.disabled = !canBuy;
+      const maxed = cost === undefined;
+      const verb = item.id === 'weapon' && level === 0 ? 'Купить' : 'Улучшить';
+      button.textContent = maxed ? 'Максимум' : verb + ' · ' + cost + ' ОП';
+      button.setAttribute('aria-label', item.name + ' · ' + button.textContent);
+      const shortfall = dive.atSurface && !maxed && !canBuy ? cost - dive.profile.xp : 0;
+      row.querySelector('.shop-shortfall').textContent = shortfall ? 'Не хватает ' + shortfall + ' ОП' : '';
+      row.querySelector('.shop-description').textContent = item.id === 'air' && !maxed
+        ? 'Следующий запас · ' + item.values[level + 1] + ' с'
+        : item.copy;
+    }
   }
 
   function renderPanel() {
@@ -233,14 +198,15 @@
     kicker.textContent = '';
     if (panelType === 'guide') {
       title.textContent = 'Как играть';
-      panelContent.innerHTML = '<p>Собирай находки и возвращайся на поверхность, чтобы получить очки опыта (ОП). Кислород восстанавливается постепенно. Рывок помогает уйти от хищников, но расходует больше воздуха.</p>'
+      panelContent.innerHTML = '<p>Опыт за находки и побеждённых хищников начисляется после всплытия. На поверхности кислород восстанавливается постепенно. Рывок помогает уйти от хищников и расходует больше воздуха.</p>'
         + '<div class="guide-list">' + [
           ['Плавание', '<kbd>W A S D</kbd><kbd>↑ ← ↓ →</kbd>'],
           ['Рывок', '<kbd>Shift</kbd>'],
           ['Гарпун', '<kbd>Space</kbd>'],
+          ['Нож', '<kbd>F</kbd>'],
           ['Карта и снаряжение', '<kbd>M</kbd><kbd>E</kbd>'],
         ].map(([label, keys]) => '<div class="guide-line"><span>' + label + '</span><span class="guide-keys">' + keys + '</span></div>').join('') + '</div>'
-        + '<p>На сенсорном экране плыви джойстиком слева. Гарпун продаётся на поверхности. Чтобы прицелиться, направь джойстик в сторону хищника.</p>'
+        + '<p>Нож есть с начала игры и действует вблизи. Гарпун продаётся на поверхности. Для атаки повернись к хищнику джойстиком или клавишами плавания.</p>'
         + '<div class="panel-actions"><button class="primary" data-action="' + (started ? 'pause' : 'start') + '">' + (started ? 'Назад в меню паузы' : 'Погрузиться') + '</button></div>';
     } else if (panelType === 'pause') {
       title.textContent = 'Пауза';
@@ -251,20 +217,15 @@
       updateSoundButtons();
     } else if (panelType === 'shop') {
       title.textContent = 'Снаряжение';
-      kicker.textContent = dive.profile.xp + ' ОП доступно';
-      panelContent.innerHTML = '<p>' + (dive.atSurface ? 'Выбери улучшение перед следующим погружением.' : 'Покупки доступны после всплытия.') + '</p>'
-        + '<div class="shop-list">' + upgrades.map(item => {
-          const level = dive.profile.levels[item.id];
-          const cost = item.costs[level];
-          const maxed = cost === undefined;
-          const disabled = maxed || !dive.atSurface || dive.profile.xp < cost;
-          const air = item.id === 'air' && !maxed ? ' · ' + item.values[level + 1] + ' с' : '';
-          return '<article class="shop-row"><span class="shop-symbol">' + icon(item.icon) + '</span><div><h3>' + item.name
-            + '</h3><p>' + item.copy + air + '</p><div class="levels" aria-label="Уровень ' + level + ' из ' + item.costs.length + '">'
-            + item.costs.map((_, i) => '<i class="' + (i < level ? 'filled' : '') + '"></i>').join('')
-            + '</div><button type="button" data-buy="' + item.id + '" ' + (disabled ? 'disabled' : '') + '>'
-            + (maxed ? 'Максимум' : (item.id === 'weapon' && !level ? 'Купить · ' : '') + cost + ' ОП') + '</button></div></article>';
-        }).join('') + '</div>';
+      panelContent.innerHTML = (dive.atSurface ? '' : '<p>Покупки доступны после всплытия.</p>')
+        + '<div class="shop-list">' + upgrades.map(item =>
+          '<article class="shop-row" data-upgrade="' + item.id + '"><span class="shop-symbol">' + icon(item.icon)
+          + '</span><div class="shop-details"><h3>' + item.name + '</h3><p class="shop-description"></p>'
+          + '<div class="shop-progress"><span class="shop-level"></span><div class="levels" aria-hidden="true">'
+          + '<i></i>'.repeat(item.costs.length) + '</div></div><div class="shop-purchase"><button type="button" data-buy="'
+          + item.id + '"></button><span class="shop-shortfall"></span></div></div></article>'
+        ).join('') + '</div>';
+      updateShop();
     } else if (panelType === 'map') {
       title.textContent = 'Карта океана';
       kicker.textContent = dive.activeZone.name + ' · ' + dive.meters + ' м';
@@ -274,7 +235,7 @@
     } else if (panelType === 'end') {
       title.textContent = 'Погружение окончено';
       kicker.textContent = lastResult.cause;
-      const lost = lastResult.lost ? 'Добыча на ' + lastResult.lost + ' ОП осталась под водой. ' : '';
+      const lost = lastResult.lost ? 'За это погружение не засчитано ' + lastResult.lost + ' ОП. ' : '';
       panelContent.innerHTML = '<p>' + lost + (lastResult.lives ? 'Осталось жизней · ' + lastResult.lives : 'Жизни закончились. Заработанные ОП и улучшения сохранены.') + '</p>'
         + '<div class="panel-actions"><button class="primary" data-action="respawn">' + (lastResult.lives ? 'Вернуться на поверхность' : 'Новая экспедиция') + '</button></div>';
     }
@@ -285,9 +246,10 @@
     stick.pointer = null;
     stick.x = stick.y = 0;
     byId('knob').style.transform = '';
-    hold.boost = hold.attack = false;
-    byId('boost').classList.remove('pressed');
-    byId('attack').classList.remove('pressed');
+    for (const id of Object.keys(hold)) {
+      hold[id] = false;
+      byId(id).classList.remove('pressed');
+    }
   }
 
   function action(name) {
@@ -319,13 +281,20 @@
     return true;
   }
 
-  const movementKeys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'Space'];
+  const movementKeys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'Space', 'KeyF'];
   const keyOn = (...codes) => codes.some(code => pressed.has(code));
   function controls() {
     const x = Number(keyOn('KeyD', 'ArrowRight')) - Number(keyOn('KeyA', 'ArrowLeft'));
     const y = Number(keyOn('KeyS', 'ArrowDown')) - Number(keyOn('KeyW', 'ArrowUp'));
     return { x: stick.x || x, y: stick.y || y,
-      boost: hold.boost || keyOn('ShiftLeft', 'ShiftRight'), attack: hold.attack || keyOn('Space') };
+      boost: hold.boost || keyOn('ShiftLeft', 'ShiftRight'),
+      attack: hold.attack || keyOn('Space'), knife: hold.knife || keyOn('KeyF') };
+  }
+
+  function useWeapon(id) {
+    const { x, y } = controls();
+    if (id === 'knife') dive.swingKnife(x, y);
+    else dive.shoot(x, y);
   }
   const joystick = byId('joystick');
   function moveStick(event) {
@@ -355,7 +324,7 @@
     byId('knob').style.transform = '';
   }
   for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) joystick.addEventListener(event, releaseStick);
-  for (const id of ['boost', 'attack']) {
+  for (const id of Object.keys(hold)) {
     const button = byId(id);
     let pointer;
     button.addEventListener('pointerdown', event => {
@@ -365,10 +334,7 @@
       button.setPointerCapture(pointer);
       hold[id] = true;
       button.classList.add('pressed');
-      if (id === 'attack') {
-        const { x, y } = controls();
-        dive.shoot(x, y);
-      }
+      if (id !== 'boost') useWeapon(id);
     });
     for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) button.addEventListener(type, event => {
       if (event.pointerId !== pointer) return;
@@ -402,6 +368,8 @@
     if (movementKeys.includes(event.code)) {
       event.preventDefault();
       pressed.add(event.code);
+      if (!event.repeat && event.code === 'KeyF') useWeapon('knife');
+      if (!event.repeat && event.code === 'Space') useWeapon('attack');
     }
     if (!event.repeat && event.code === 'KeyM') showPanel('map');
     if (!event.repeat && event.code === 'KeyE') showPanel('shop');
@@ -427,13 +395,11 @@
     if (!button) return;
     if (button.hasAttribute('data-sound')) toggleSound();
     else if (button.dataset.action) action(button.dataset.action);
-    else if (button.dataset.buy) {
+    else if (panelType === 'shop' && button.dataset.buy) {
       if (dive.buy(button.dataset.buy)) {
-        renderPanel();
+        updateShop();
         updateHud();
-        const updated = panel.querySelector('[data-buy="' + button.dataset.buy + '"]');
-        if (updated.disabled) panel.focus();
-        else updated.focus();
+        if (button.disabled && document.activeElement === button) panel.focus({ preventScroll: true });
       }
     }
   });
