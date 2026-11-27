@@ -129,8 +129,8 @@
 
     breath(out, time, inhale) {
       if (inhale) {
-        this.noiseBurst(out, time, .34, 620, 1770, .36, .17, 'bandpass', 1.1);
-        this.noiseBurst(out, time + .041, .255, 950, 2600, .14, .13, 'highpass');
+        this.noiseBurst(out, time, .34, 620, 1770, .36 * .70, .17, 'bandpass', 1.1);
+        this.noiseBurst(out, time + .041, .255, 950, 2600, .14 * .70, .13, 'highpass');
       } else {
         this.noiseBurst(out, time, .57, 1450, 580, .40, .057, 'bandpass', .85);
         this.noiseBurst(out, time + .013, .44, 420, 240, .23, .042, 'lowpass');
@@ -168,7 +168,7 @@
 
       if (kind === 'inhale') {
         this.stopBreath();
-        if (!this.playRecording('inhale', out, time, .89)) this.breath(out, time, true);
+        if (!this.playRecording('inhale', out, time, .89 * .70)) this.breath(out, time, true);
       } else if (kind === 'breath-cancel') {
         this.stopBreath();
       } else if (kind === 'dive-in') {

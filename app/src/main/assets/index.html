@@ -71,6 +71,10 @@
         <div class="surface-tip" id="tip"></div>
         <div class="bag" id="bag" title="Опыт за находки и победы начисляется при всплытии"><span data-icon="bag"></span><span id="bag-text">0 ОП к зачислению</span></div>
       </div>
+      <div class="boost-gauge" id="boost-gauge">
+        <div class="boost-meta"><span data-icon="bolt"></span><span>Рывок</span><strong id="boost-text">2 с</strong></div>
+        <div class="meter" id="boost-meter" role="progressbar" aria-label="Заряд рывка" aria-valuemin="0" aria-valuemax="2" aria-valuenow="2"><div id="boost-fill"></div></div>
+      </div>
       <button class="icon-button mine-tool" id="defuse" type="button" title="Обезвредить мину · R">
         <span data-icon="kit"></span><span>Наборы</span><strong id="kit-count">0</strong>
       </button>
@@ -79,7 +83,7 @@
         <div class="touch-actions">
           <button class="touch-button" id="attack" type="button" aria-label="Выстрелить гарпуном"><span data-icon="spear"></span><span>Гарпун</span></button>
           <button class="touch-button" id="knife" type="button" aria-label="Ударить ножом"><span data-icon="knife"></span><span>Нож</span></button>
-          <button class="touch-button boost" id="boost" type="button" aria-label="Ускориться"><span data-icon="bolt"></span><span>Рывок</span><i id="stamina"></i></button>
+          <button class="touch-button boost" id="boost" type="button" aria-label="Ускориться"><span data-icon="bolt"></span><span>Рывок</span><i id="boost-button-fill"></i></button>
         </div>
       </div>
     </section>

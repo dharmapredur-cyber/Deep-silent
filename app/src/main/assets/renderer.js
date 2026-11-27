@@ -2,7 +2,7 @@
   'use strict';
 
   const W = window.DepthWorld;
-  const { knifeReach, knifeArc, knifeDuration } = window.DepthSimulation;
+  const { knifeReach, knifeArc, knifeDuration, shieldDuration } = window.DepthSimulation;
   const tau = Math.PI * 2;
   const chunkSize = 384;
   const diverScale = 1.48;
@@ -250,11 +250,43 @@
     c.restore();
   }
 
+  const insulatingSuits = [
+    null,
+    { body: '#245952', shadow: '#143f45', trim: '#7cebc7', light: '124,235,199' },
+    { body: '#264e75', shadow: '#213b5e', trim: '#91dfff', light: '145,223,255' },
+    { body: '#4e4878', shadow: '#302e58', trim: '#e3b8ff', light: '227,184,255' },
+  ];
+
+  function shieldAura(c, p, suit, remaining) {
+    const life = remaining / shieldDuration;
+    const spread = 1 - life;
+    c.save();
+    c.translate(p.x, p.y);
+    c.rotate(p.angle);
+    glow(c, -10, 0, 86 * (1 + spread * .2), suit.light, life * .37);
+    for (let i = 0; i < 2; i++) {
+      c.beginPath();
+      c.ellipse(-10, 0, 52 + spread * 24 + i * 7, 24 + spread * 22 + i * 5, 0, 0, tau);
+      c.strokeStyle = rgba(suit.light, life * (i === 0 ? .85 : .44));
+      c.lineWidth = i === 0 ? 2.7 : 1.4;
+      c.stroke();
+    }
+    for (let i = 0; i < 6; i++) {
+      const angle = i * tau / 6 + spread * .8;
+      const x = -10 + Math.cos(angle) * (55 + spread * 32);
+      const y = Math.sin(angle) * (31 + spread * 24);
+      line(c, rgba(suit.light, life * .96), 1.9, [x - 4, y + 4], [x + 2, y - 3], [x + 6, y + 1], [x + 9, y - 6]);
+    }
+    c.restore();
+  }
+
   function diver(c, p, dive) {
     const time = dive.phase;
+    const suit = insulatingSuits[dive.value('insulation')];
     const surface = dive.atSurface;
     const moving = Math.min(1, Math.hypot(p.vx, p.vy) / 180);
     const kick = Math.sin(time * (dive.sprint ? 24 : 11)) * (4 + 9 * moving);
+    if (suit && dive.shieldPulse > 0) shieldAura(c, p, suit, dive.shieldPulse);
     c.save();
     c.translate(p.x, p.y + (surface ? Math.sin(time * 2.6) * 3 : 0));
     if (p.invulnerable > 0 && Math.floor(p.invulnerable * 13) % 2) c.globalAlpha = .42;
@@ -267,28 +299,36 @@
 
     c.lineCap = 'round';
     c.lineJoin = 'round';
-    line(c, '#2a5363', 7.5, [-3, 4], [-16, 7 - kick * .28], [-27, 6 - kick * .57]);
+    line(c, suit ? suit.body : '#2a5363', 7.5, [-3, 4], [-16, 7 - kick * .28], [-27, 6 - kick * .57]);
     polygon(c, '#317c7a', [-24, 3 - kick*.55], [-37, 1 - kick], [-50, 7 - kick], [-37, 12 - kick], [-26, 9 - kick*.54]);
-    line(c, '#153843', 9, [-4, 2], [-15, 0 + kick * .29], [-25, 3 + kick * .53]);
-    line(c, '#4e8586', 2.4, [-11, 1 + kick * .12], [-17, 1 + kick*.30], [-24, 2 + kick * .5]);
+    line(c, suit ? suit.shadow : '#153843', 9, [-4, 2], [-15, kick * .29], [-25, 3 + kick * .53]);
+    line(c, suit ? suit.trim : '#4e8586', 2.4, [-11, 1 + kick * .12], [-17, 1 + kick*.30], [-24, 2 + kick * .5]);
     polygon(c, '#cce889', [-22, 0 + kick*.51], [-35, 1 + kick*.77], [-49, 7 + kick], [-35, 12 + kick*.81], [-23, 7 + kick*.54]);
     line(c, '#647c56', 1.2, [-27, 5 + kick*.6], [-42, 7 + kick*.9]);
 
-    path(c, '#193a49', q => {
+    path(c, suit ? suit.body : '#193a49', q => {
       q.moveTo(-10, -3); q.quadraticCurveTo(-3, -10, 9, -7);
       q.quadraticCurveTo(17, -4, 13, 2); q.quadraticCurveTo(7, 8, -7, 6);
     });
-    path(c, '#d4e895', q => {
+    path(c, suit ? suit.trim : '#d4e895', q => {
       q.moveTo(-9, -4); q.quadraticCurveTo(0, -9, 10, -6);
       q.lineTo(13, -3); q.quadraticCurveTo(1, -4, -9, 1);
     });
     const arm = Math.sin(time * 7.5) * moving;
-    line(c, '#366875', 5, [9, 0], [16 + arm * 2, 4 + arm * 3], [24 + arm * 4, 1 + arm * 4]);
-    ellipse(c, 23 + arm * 4, 1 + arm * 4, 3.1, 2.1, 0, '#e2ab84');
-    ellipse(c, 17, -5, 7.4, 6.7, 0, '#113842');
-    ellipse(c, 19.5, -4.2, 5.5, 5.4, 0, '#e2ae86');
-    polygon(c, '#a8ecdc', [18, -8], [25, -7], [26, -4], [19, -3]);
-    line(c, '#effff0', 1, [19, -7], [23, -6.8]);
+    line(c, suit ? suit.body : '#366875', 5, [9, 0], [16 + arm * 2, 4 + arm * 3], [24 + arm * 4, 1 + arm * 4]);
+    ellipse(c, 23 + arm * 4, 1 + arm * 4, 3.1, 2.1, 0, suit ? suit.trim : '#e2ab84');
+    if (suit) {
+      ellipse(c, 18, -5, 8.4, 7.2, 0, suit.trim);
+      ellipse(c, 18, -5, 7, 5.9, 0, suit.shadow);
+      polygon(c, '#c2f3f3', [17, -8], [24, -7], [24, -3], [17, -2]);
+      polygon(c, suit.shadow, [-3, -2], [5, -2], [7, 2], [1, 6], [-5, 2]);
+      line(c, suit.trim, 1.15, [2, -2], [-.2, 1], [2.5, 1], [.4, 4.5]);
+    } else {
+      ellipse(c, 17, -5, 7.4, 6.7, 0, '#113842');
+      ellipse(c, 19.5, -4.2, 5.5, 5.4, 0, '#e2ae86');
+      polygon(c, '#a8ecdc', [18, -8], [25, -7], [26, -4], [19, -3]);
+      line(c, '#effff0', 1, [19, -7], [23, -6.8]);
+    }
     if (dive.knifeSlash) {
       line(c, '#2b555a', 2.5, [22, 2], [28, 2]);
       polygon(c, '#e0f1de', [27, .2], [35, -1.6], [32, 3], [27, 3.4]);

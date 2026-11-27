@@ -4,6 +4,7 @@
   const W = window.DepthWorld;
   const { Dive, upgrades, mineKitCost } = window.DepthSimulation;
   const byId = id => document.getElementById(id);
+  const seconds = value => String(value).replace('.', ',') + ' с';
   const icons = {
     depth: '<path d="m3 12 5-5 4 4 4-4 5 5M6 16l6 5 6-5"/><circle cx="12" cy="4" r="1" fill="currentColor" stroke="none"/>',
     down: '<path d="M12 4v15m-6-6 6 6 6-6"/>',
@@ -113,12 +114,18 @@
     const ready = dive.canBuyKit || upgrades.some(upgrade => dive.upgradeOffer(upgrade).canBuy);
     const nearMine = Boolean(dive.nearbyMine());
     const preparing = dive.atSurface && dive.breathTime > 0;
+    const boostCapacity = dive.value('boostDuration');
+    const boostRatio = W.clamp(p.boostCharge / boostCapacity, 0, 1);
+    const boostSeconds = Math.min(boostCapacity, Math.ceil(p.boostCharge * 10) / 10);
+    const boostWait = dive.boostDepleted ? Math.max(1, Math.ceil((1 - boostRatio) * dive.value('boostRecovery') - 1e-8)) : 0;
     byId('air-fill').style.transform = 'scaleX(' + Math.max(0, p.air / maximum) + ')';
-    byId('stamina').style.transform = 'scaleX(' + p.stamina + ')';
+    byId('boost-fill').style.transform = 'scaleX(' + boostRatio + ')';
+    byId('boost-button-fill').style.transform = 'scaleX(' + boostRatio + ')';
     byId('edge-signal').style.opacity = Math.max(dive.impact * .70, low ? .14 + Math.sin(dive.phase * 6) * .055 : 0);
     const key = [
       current, maximum, dive.meters, dive.profile.xp, p.lives, lives, dive.activeZone.id,
       dive.pendingXp, ready, dive.atSurface, low, dive.value('weapon'), dive.profile.kits, nearMine, preparing,
+      boostCapacity, boostSeconds, boostWait,
     ].join(',');
     if (previousUi === key) return;
     previousUi = key;
@@ -127,6 +134,14 @@
     byId('air-meter').setAttribute('aria-valuenow', current);
     byId('air-meter').setAttribute('aria-valuemax', maximum);
     byId('air-meter').closest('.oxygen').classList.toggle('low', low);
+    const boostText = boostWait ? '↻ ' + seconds(boostWait) : seconds(boostSeconds);
+    const boostMeter = byId('boost-meter');
+    byId('boost-text').textContent = boostText;
+    byId('boost-gauge').classList.toggle('recharging', boostWait > 0);
+    byId('boost').classList.toggle('recharging', boostWait > 0);
+    boostMeter.setAttribute('aria-valuenow', boostSeconds);
+    boostMeter.setAttribute('aria-valuemax', boostCapacity);
+    boostMeter.setAttribute('aria-valuetext', boostWait ? 'Восстановление · ' + seconds(boostWait) : seconds(boostSeconds));
     byId('depth').innerHTML = dive.meters + ' <small>м</small>';
     byId('xp').innerHTML = dive.profile.xp + ' <small>ОП</small>';
     const heartKey = p.lives + '/' + lives;
@@ -189,8 +204,9 @@
     for (const item of upgrades) {
       const row = panelContent.querySelector('[data-upgrade="' + item.id + '"]');
       const { level, cost, canBuy } = dive.upgradeOffer(item);
-      row.querySelector('.shop-level').textContent = 'Уровень ' + level + ' из ' + item.costs.length;
-      row.querySelectorAll('.levels i').forEach((dot, i) => dot.classList.toggle('filled', i < level));
+      const firstLevel = item.firstLevel || 0;
+      row.querySelector('.shop-level').textContent = 'Уровень ' + (level + firstLevel) + ' из ' + (item.costs.length + firstLevel);
+      row.querySelectorAll('.levels i').forEach((dot, i) => dot.classList.toggle('filled', i < level + firstLevel));
       const button = row.querySelector('button');
       button.disabled = !canBuy;
       const maxed = cost === undefined;
@@ -203,6 +219,9 @@
       if (item.id === 'air' && !maxed) description.textContent = 'Следующий запас · ' + item.values[level + 1] + ' с';
       else if (item.id === 'insulation' && !maxed) {
         description.textContent = 'Следующий уровень · защита от ' + ['малых', 'пятнистых', 'гигантских'][level] + ' скатов';
+      } else if (firstLevel) {
+        description.textContent = item.copy + ' · ' + seconds(item.values[level])
+          + (maxed ? '' : ' → ' + seconds(item.values[level + 1]));
       } else description.textContent = item.copy;
     }
     const kit = panelContent.querySelector('[data-upgrade="kit"]');
@@ -218,7 +237,7 @@
     kicker.textContent = '';
     if (panelType === 'guide') {
       title.textContent = 'Как играть';
-      panelContent.innerHTML = '<p>Опыт за находки и побеждённых хищников начисляется после всплытия. На поверхности кислород восстанавливается постепенно. Рывок помогает уйти от хищников и расходует больше воздуха.</p>'
+      panelContent.innerHTML = '<p>Опыт за находки и побеждённых хищников начисляется после всплытия. На поверхности кислород восстанавливается постепенно. Рывок расходует воздух быстрее и заряжается, пока им не пользуешься.</p>'
         + '<div class="guide-list">' + [
           ['Плавание', '<kbd>W A S D</kbd><kbd>↑ ← ↓ →</kbd>'],
           ['Рывок', '<kbd>Shift</kbd>'],
@@ -229,6 +248,7 @@
         ].map(([label, keys]) => '<div class="guide-line"><span>' + label + '</span><span class="guide-keys">' + keys + '</span></div>').join('') + '</div>'
         + '<p>Нож есть с начала игры и действует вблизи. Гарпун продаётся на поверхности. Для атаки повернись к хищнику джойстиком или клавишами плавания.</p>'
         + '<p>Подплыви к мине и нажми «Наборы» или R. На одну мину уходит один набор. Чем крупнее электроскат, тем выше уровень защиты костюма нужен.</p>'
+        + '<p>Гибель дайвера сбрасывает опыт, покупки и находки экспедиции.</p>'
         + '<div class="panel-actions"><button class="primary" data-action="' + (started ? 'pause' : 'start') + '">' + (started ? 'Назад в меню паузы' : 'Погрузиться') + '</button></div>';
     } else if (panelType === 'pause') {
       title.textContent = 'Пауза';
@@ -244,7 +264,7 @@
           '<article class="shop-row" data-upgrade="' + item.id + '"><span class="shop-symbol">' + icon(item.icon)
           + '</span><div class="shop-details"><h3>' + item.name + '</h3><p class="shop-description"></p>'
           + '<div class="shop-progress"><span class="shop-level"></span><div class="levels" aria-hidden="true">'
-          + '<i></i>'.repeat(item.costs.length) + '</div></div><div class="shop-purchase"><button type="button" data-buy="'
+          + '<i></i>'.repeat(item.costs.length + (item.firstLevel || 0)) + '</div></div><div class="shop-purchase"><button type="button" data-buy="'
           + item.id + '"></button><span class="shop-shortfall"></span></div></div></article>'
         ).join('') + '<article class="shop-row" data-upgrade="kit"><span class="shop-symbol">' + icon('kit')
         + '</span><div class="shop-details"><h3>Набор для мин</h3><p>Обезвреживает одну мину.</p>'
@@ -260,11 +280,11 @@
           .map(item => '<span><i style="background:' + item.color + '"></i>' + item.plural + '</span>').join('') + '</div>';
       renderer.drawMap(byId('map-canvas'), dive);
     } else if (panelType === 'end') {
-      title.textContent = 'Погружение окончено';
+      title.textContent = 'Дайвер погиб';
       kicker.textContent = lastResult.cause;
-      const lost = lastResult.lost ? 'За это погружение не засчитано ' + lastResult.lost + ' ОП. ' : '';
-      panelContent.innerHTML = '<p>' + lost + (lastResult.lives ? 'Осталось жизней · ' + lastResult.lives : 'Жизни закончились. Заработанные ОП и улучшения сохранены.') + '</p>'
-        + '<div class="panel-actions"><button class="primary" data-action="respawn">' + (lastResult.lives ? 'Вернуться на поверхность' : 'Новая экспедиция') + '</button></div>';
+      const lost = lastResult.lost ? 'Потеряно ' + lastResult.lost + ' ОП. ' : '';
+      panelContent.innerHTML = '<p>' + lost + 'Опыт, покупки и находки экспедиции сброшены. Рекорд глубины сохранён.</p>'
+        + '<div class="panel-actions"><button class="primary" data-action="respawn">Новая экспедиция</button></div>';
     }
   }
 
@@ -284,6 +304,7 @@
     else if (name === 'start') start();
     else if (name === 'respawn') {
       dive.respawn();
+      toastStack.replaceChildren();
       renderer.snap(dive.player);
       updateHud();
       hidePanel();
