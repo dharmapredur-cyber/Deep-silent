@@ -33,9 +33,32 @@ jobs:
           path: quiet-depth.apk
           if-no-files-found: error
 
-  release:
+  android-smoke:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v7
+        with:
+          name: quiet-depth-apk
+      - name: Enable KVM for the emulator
+        run: sudo chown runner /dev/kvm
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: default
+          emulator-options: -no-window -no-snapshot -no-boot-anim -gpu swiftshader_indirect
+          script: node tests/android-smoke.mjs
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: android-smoke
     runs-on: ubuntu-24.04
     permissions:
       contents: write

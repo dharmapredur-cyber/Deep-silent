@@ -34,6 +34,8 @@ gradle :app:lintDebug :app:assembleDebug
 
 APK появится в `app/build/outputs/apk/debug/app-debug.apk`. Игровые ресурсы поставляются внутри APK. Шрифт Manrope распространяется под лицензией SIL OFL, текст которой включён в `app/src/main/assets/art/Manrope-OFL.txt`.
 
+В звуковых эффектах использованы записи под лицензией CC0. [Crunchy bite — fvcalderan](https://opengameart.org/content/crunchy-bite), [Male Screams [1] — marc3122](https://freesound.org/people/marc3122/sounds/556976/).
+
 Игру также можно запустить в браузере.
 
 ```sh

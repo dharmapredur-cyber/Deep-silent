@@ -7,6 +7,7 @@
     upgrade: [390, 620, .24], zone: [280, 410, .44], milestone: [550, 880, .49],
     shield: [470, 760, .24], defuse: [670, 398, .19], 'electric-charge': [148, 326, .39],
   };
+  const combatEffects = ['bite', 'death'];
 
   class DiveAudio {
     constructor() {
@@ -41,6 +42,18 @@
           .then(buffer => { this.recordings[name] = buffer; })
           .catch(() => { /* Use a synthesized cue if this WebView cannot decode MP3. */ });
       }
+      if (!window.AndroidEffects) {
+        for (const name of combatEffects) {
+          void fetch('audio/' + name + '.ogg')
+            .then(response => {
+              if (!response.ok) throw new Error('Unable to load audio');
+              return response.arrayBuffer();
+            })
+            .then(bytes => context.decodeAudioData(bytes))
+            .then(buffer => { this.recordings[name] = buffer; })
+            .catch(() => { /* The synthesized cue is still available. */ });
+        }
+      }
       this.noise = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
       const samples = this.noise.getChannelData(0);
       for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
@@ -65,6 +78,7 @@
 
     mix(active, muted) {
       this.active = active;
+      if (this.muted !== muted) window.AndroidEffects?.setMuted(muted);
       this.muted = muted;
       this.applyMix();
     }
@@ -146,7 +160,7 @@
       gain.gain.value = volume;
       source.connect(gain).connect(out);
       source.start(at);
-      if (name !== 'mine') {
+      if (name === 'inhale' || name === 'surface') {
         this.breathSource = source;
         source.onended = () => {
           if (this.breathSource === source) this.breathSource = null;
@@ -190,7 +204,10 @@
     }
 
     play(kind, { volume = 1, pan = 0 } = {}) {
-      if (this.muted || !this.master || this.context.state !== 'running' || volume < .025) return;
+      if (this.muted || volume < .025) return;
+      if (kind === 'death') this.stopBreath();
+      if (combatEffects.includes(kind) && window.AndroidEffects?.play(kind)) return;
+      if (!this.master || this.context.state !== 'running') return;
       const time = this.context.currentTime;
       const out = this.effectOutput(pan);
 
@@ -221,12 +238,12 @@
         this.noiseBurst(out, time, .17, 2550, 720, .26, .02);
         this.note(out, time + .016, .09, 530, 320, .056);
       } else if (kind === 'bite') {
+        if (this.playRecording('bite', out, time, .92)) return;
         this.noiseBurst(out, time, .16, 2650, 460, .51, .016);
         this.noiseBurst(out, time + .025, .14, 570, 240, .38, .01, 'lowpass');
         this.note(out, time + .01, .16, 122, 52, .19, 'triangle');
       } else if (kind === 'death') {
-        this.stopBreath();
-        this.scream(out, time + .045);
+        if (!this.playRecording('death', out, time, .96)) this.scream(out, time + .045);
       } else if (tones[kind]) {
         const [from, to, duration] = tones[kind];
         this.note(out, time, duration, from, to, .115, kind === 'damage' ? 'triangle' : 'sine');
