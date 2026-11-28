@@ -4,7 +4,8 @@
   const W = window.DepthWorld;
   const { Dive, upgrades, mineKitCost } = window.DepthSimulation;
   const byId = id => document.getElementById(id);
-  const seconds = value => String(value).replace('.', ',') + ' с';
+  const decimal = value => String(value).replace('.', ',');
+  const seconds = value => decimal(value) + ' с';
   const icons = {
     depth: '<path d="m3 12 5-5 4 4 4-4 5 5M6 16l6 5 6-5"/><circle cx="12" cy="4" r="1" fill="currentColor" stroke="none"/>',
     down: '<path d="M12 4v15m-6-6 6 6 6-6"/>',
@@ -23,6 +24,7 @@
     pause: '<path d="M9 5v14m6-14v14" stroke-width="2.3"/>',
     close: '<path d="m6 6 12 12M18 6 6 18"/>',
     move: '<path d="M12 2v5m-2-3 2-2 2 2m-2 18v-5m-2 3 2 2 2-2M2 12h5m-3-2-2 2 2 2m18-2h-5m3-2 2 2-2 2"/>',
+    tilt: '<rect x="6.5" y="3" width="11" height="18" rx="2" transform="rotate(-19 12 12)"/><path d="M3 8a9 9 0 0 1 1.7-3M20 16a9 9 0 0 1-1.8 3M12 17h1"/>',
     pin: '<path d="M19 10c0 5-7 10-7 10s-7-5-7-10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2"/>',
     bag: '<path d="M7 8h10l3 10c.3 1.1-.4 2-1.5 2h-13c-1.1 0-1.8-.9-1.5-2zM9 8V6a3 3 0 0 1 6 0v2"/>',
   };
@@ -39,6 +41,9 @@
   let previousHearts = '';
   const pressed = new Set();
   const stick = { x: 0, y: 0, pointer: null };
+  const sensor = window.AndroidTilt;
+  const tiltAvailable = Boolean(sensor?.isAvailable());
+  const tilt = { origin: null, x: 0, y: 0, lastSample: 0 };
   const hold = { boost: false, attack: false, knife: false };
   const cover = byId('cover');
   const overlay = byId('overlay');
@@ -52,6 +57,43 @@
   const touchMode = navigator.maxTouchPoints > 0 && window.matchMedia('(pointer: coarse)').matches;
   if (touchMode) document.body.classList.add('touch-mode');
   for (const element of document.querySelectorAll('[data-icon]')) element.innerHTML = icon(element.dataset.icon);
+
+  function inTiltMode() {
+    return tiltAvailable && dive.profile.controlMode === 'tilt';
+  }
+
+  function calibrateTilt() {
+    tilt.origin = null;
+    tilt.x = tilt.y = 0;
+    tilt.lastSample = 0;
+  }
+
+  function syncTilt() {
+    const enabled = inTiltMode();
+    document.body.classList.toggle('tilt-mode', enabled);
+    byId('cover-input').textContent = enabled ? 'Плавание наклоном смартфона' : 'Джойстик для плавания';
+    sensor?.setEnabled(enabled && started && !panelType && !document.hidden);
+  }
+
+  window.receiveDeviceTilt = (right, down, normal, rotation) => {
+    if (!inTiltMode() || panelType || !started || document.hidden) return;
+    if (![right, down, normal].every(Number.isFinite) || Math.hypot(right, down, normal) < 1) return;
+    const roll = Math.atan2(right, Math.hypot(down, normal));
+    const pitch = Math.atan2(down, normal);
+    if (!tilt.origin || tilt.origin.rotation !== rotation) {
+      calibrateTilt();
+      tilt.origin = { roll, pitch, rotation };
+    }
+    const x = roll - tilt.origin.roll;
+    const pitchChange = pitch - tilt.origin.pitch;
+    const y = Math.atan2(Math.sin(pitchChange), Math.cos(pitchChange));
+    const distance = Math.hypot(x, y);
+    const strength = W.clamp((distance - .04) / .32, 0, 1);
+    const scale = distance > 0 ? strength / distance : 0;
+    tilt.x = strength ? W.mix(tilt.x, x * scale, .34) : 0;
+    tilt.y = strength ? W.mix(tilt.y, y * scale, .34) : 0;
+    tilt.lastSample = performance.now();
+  };
 
   function updateAmbience() {
     audio.mix(started && !panelType, dive.profile.muted || document.hidden);
@@ -102,7 +144,7 @@
     const stats = byId('cover-status');
     const count = dive.profile.haul.length;
     stats.hidden = count === 0;
-    stats.textContent = count + ' / ' + W.treasures.length + ' сокровищ поднято';
+    stats.textContent = count + ' / ' + dive.treasures.length + ' сокровищ поднято';
   }
 
   function updateHud() {
@@ -165,7 +207,10 @@
       if (preparing) tip = 'Вдох перед нырком';
       else if (current < maximum) tip = 'На поверхности · кислород восстанавливается';
       else if (ready) tip = 'Доступно улучшение снаряжения';
-      else if (dive.profile.haul.length === 0) tip = touchMode ? 'Джойстик вниз, чтобы нырнуть' : 'S или ↓, чтобы нырнуть';
+      else if (dive.profile.haul.length === 0) {
+        if (inTiltMode()) tip = 'Наклони смартфон вниз, чтобы нырнуть';
+        else tip = touchMode ? 'Джойстик вниз, чтобы нырнуть' : 'S или ↓, чтобы нырнуть';
+      }
     } else if (nearMine && dive.profile.kits > 0) tip = touchMode ? 'Нажми «Наборы», чтобы обезвредить мину' : 'Нажми R, чтобы обезвредить мину';
     else if (dive.pendingXp > 0) tip = 'Всплыви, чтобы получить ОП';
     byId('tip').textContent = tip;
@@ -176,6 +221,7 @@
     panelType = type;
     if (type === 'end' && payload) lastResult = payload;
     resetControls();
+    syncTilt();
     updateAmbience();
     panel.classList.toggle('map-panel', type === 'map');
     panel.classList.toggle('shop-panel', type === 'shop');
@@ -196,6 +242,8 @@
     cover.inert = started;
     if (hadPanel && previousFocus && previousFocus.isConnected && !previousFocus.closest('[hidden]')) previousFocus.focus();
     updateAmbience();
+    calibrateTilt();
+    syncTilt();
     if (hadPanel && started) audio.unlock();
   }
 
@@ -219,6 +267,11 @@
       if (item.id === 'air' && !maxed) description.textContent = 'Следующий запас · ' + item.values[level + 1] + ' с';
       else if (item.id === 'insulation' && !maxed) {
         description.textContent = 'Следующий уровень · защита от ' + ['малых', 'пятнистых', 'гигантских'][level] + ' скатов';
+      } else if (item.id === 'knife') {
+        const next = maxed ? level : level + 1;
+        const reach = Math.round((item.reaches[next] / item.reaches[0] - 1) * 100);
+        const damage = decimal(item.values[level]) + (maxed ? '' : ' → ' + decimal(item.values[next]));
+        description.textContent = 'Урон ' + damage + ' · дальность +' + reach + '%';
       } else if (firstLevel) {
         description.textContent = item.copy + ' · ' + seconds(item.values[level])
           + (maxed ? '' : ' → ' + seconds(item.values[level + 1]));
@@ -246,17 +299,30 @@
           ['Обезвредить мину', '<kbd>R</kbd>'],
           ['Карта и снаряжение', '<kbd>M</kbd><kbd>E</kbd>'],
         ].map(([label, keys]) => '<div class="guide-line"><span>' + label + '</span><span class="guide-keys">' + keys + '</span></div>').join('') + '</div>'
-        + '<p>Нож есть с начала игры и действует вблизи. Гарпун продаётся на поверхности. Для атаки повернись к хищнику джойстиком или клавишами плавания.</p>'
+        + '<p>Нож есть с начала игры. На поверхности можно улучшить нож и купить гарпун. Для атаки повернись к хищнику движением дайвера.</p>'
         + '<p>Подплыви к мине и нажми «Наборы» или R. На одну мину уходит один набор. Чем крупнее электроскат, тем выше уровень защиты костюма нужен.</p>'
         + '<p>Гибель дайвера сбрасывает опыт, покупки и находки экспедиции.</p>'
         + '<div class="panel-actions"><button class="primary" data-action="' + (started ? 'pause' : 'start') + '">' + (started ? 'Назад в меню паузы' : 'Погрузиться') + '</button></div>';
     } else if (panelType === 'pause') {
       title.textContent = 'Пауза';
-      panelContent.innerHTML = '<p>Поднято сокровищ <b>' + dive.profile.haul.length + ' из ' + W.treasures.length
+      panelContent.innerHTML = '<p>Поднято сокровищ <b>' + dive.profile.haul.length + ' из ' + dive.treasures.length
         + '</b> · рекорд глубины <b>' + dive.profile.bestDepth + ' м</b></p>'
         + '<div class="panel-actions"><button class="primary" data-action="resume">Продолжить</button><button class="subtle" data-action="guide">Как играть</button>'
-        + '<button class="icon-button" data-sound></button><button class="subtle" data-action="home">Главное меню</button></div>';
+        + '<button class="subtle" data-action="controls">Управление</button><button class="icon-button" data-sound></button>'
+        + '<button class="subtle" data-action="home">Главное меню</button></div>';
       updateSoundButtons();
+    } else if (panelType === 'controls') {
+      title.textContent = 'Управление';
+      const tiltSelected = inTiltMode();
+      panelContent.innerHTML = '<div class="control-options">'
+        + '<button type="button" class="icon-button" data-control-mode="stick" aria-pressed="' + !tiltSelected + '">' + icon('move') + 'Виртуальный стик</button>'
+        + '<button type="button" class="icon-button" data-control-mode="tilt" aria-pressed="' + tiltSelected + '"' + (tiltAvailable ? '' : ' disabled')
+        + '>' + icon('tilt') + 'Наклон смартфона</button></div>'
+        + '<p>' + (tiltAvailable ? 'В режиме наклона держи смартфон удобно и нажми «Калибровка». Затем наклоняй его в сторону движения. Кнопки действий остаются на экране.'
+          : 'Наклон доступен в Android-приложении на смартфоне с датчиком движения.') + '</p>'
+        + '<div class="panel-actions">'
+        + (tiltSelected && started ? '<button class="primary" data-action="calibrate">Калибровка</button>' : '')
+        + '<button class="subtle" data-action="resume">Готово</button></div>';
     } else if (panelType === 'shop') {
       title.textContent = 'Снаряжение';
       panelContent.innerHTML = (dive.atSurface ? '' : '<p>Покупки доступны после всплытия.</p>')
@@ -292,6 +358,7 @@
     pressed.clear();
     stick.pointer = null;
     stick.x = stick.y = 0;
+    calibrateTilt();
     byId('knob').style.transform = '';
     for (const id of Object.keys(hold)) {
       hold[id] = false;
@@ -302,6 +369,11 @@
   function action(name) {
     if (name === 'resume') hidePanel();
     else if (name === 'start') start();
+    else if (name === 'calibrate') {
+      if (panelType === 'controls') hidePanel();
+      calibrateTilt();
+      announce('calibrate', 'Держи смартфон в нейтральном положении');
+    }
     else if (name === 'respawn') {
       dive.respawn();
       toastStack.replaceChildren();
@@ -334,7 +406,10 @@
   function controls() {
     const x = Number(keyOn('KeyD', 'ArrowRight')) - Number(keyOn('KeyA', 'ArrowLeft'));
     const y = Number(keyOn('KeyS', 'ArrowDown')) - Number(keyOn('KeyW', 'ArrowUp'));
-    return { x: stick.x || x, y: stick.y || y,
+    const tiltActive = inTiltMode();
+    const movement = tiltActive ? tilt : stick;
+    const hasMotion = !tiltActive || performance.now() - tilt.lastSample < 550;
+    return { x: x || (hasMotion ? movement.x : 0), y: y || (hasMotion ? movement.y : 0),
       boost: hold.boost || keyOn('ShiftLeft', 'ShiftRight'),
       attack: hold.attack || keyOn('Space'), knife: hold.knife || keyOn('KeyF') };
   }
@@ -436,6 +511,7 @@
       resetControls();
       window.pauseDive();
     }
+    syncTilt();
     updateAmbience();
   });
 
@@ -443,6 +519,16 @@
     const button = event.target.closest('button');
     if (!button) return;
     if (button.hasAttribute('data-sound')) toggleSound();
+    else if (panelType === 'controls' && button.dataset.controlMode) {
+      const mode = button.dataset.controlMode;
+      if (mode === 'tilt' && !tiltAvailable) return;
+      dive.profile.controlMode = mode;
+      calibrateTilt();
+      dive.save();
+      syncTilt();
+      renderPanel();
+      panelContent.querySelector('[data-control-mode="' + mode + '"]').focus();
+    }
     else if (button.dataset.action) action(button.dataset.action);
     else if (panelType === 'shop' && button.dataset.buy) {
       if (button.dataset.buy === 'kit' ? dive.buyKit() : dive.buy(button.dataset.buy)) {
@@ -461,6 +547,7 @@
   modal.addEventListener('click', event => { if (event.target === modal && panelType !== 'end') hidePanel(); });
 
   updateSoundButtons();
+  syncTilt();
   coverStats();
 
   function frame(time) {

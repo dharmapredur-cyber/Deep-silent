@@ -20,7 +20,10 @@
     <section id="cover" class="cover" aria-labelledby="title">
       <header class="cover-header">
         <div class="brand"><span class="brand-mark" data-icon="depth"></span><span>ФРИДАЙВИНГ</span></div>
-        <button class="icon-button sound-button" type="button" aria-label="Выключить звук" title="Звук" data-sound><span data-icon="sound"></span></button>
+        <div class="cover-tools">
+          <button class="icon-button control-toggle" type="button" data-action="controls"><span data-icon="tilt"></span><span>Управление</span></button>
+          <button class="icon-button sound-button" type="button" aria-label="Выключить звук" title="Звук" data-sound><span data-icon="sound"></span></button>
+        </div>
       </header>
       <div class="cover-body">
         <h1 id="title">ТИХАЯ<br><span>ГЛУБИНА</span></h1>
@@ -37,7 +40,7 @@
           <span class="keys"><kbd>Space</kbd></span><span>Гарпун</span>
           <span class="keys"><kbd>F</kbd></span><span>Нож</span>
         </div>
-        <div class="cover-touch"><span data-icon="move"></span><span>Джойстик для плавания</span></div>
+        <div class="cover-touch"><span data-icon="move"></span><span id="cover-input">Джойстик для плавания</span></div>
         <span class="cover-status" id="cover-status" hidden></span>
       </footer>
     </section>
@@ -80,6 +83,7 @@
       </button>
       <div class="touch-controls">
         <div id="joystick" class="joystick" aria-label="Джойстик плавания"><span data-icon="move"></span><div id="knob" class="knob"></div></div>
+        <button class="icon-button tilt-calibration" type="button" data-action="calibrate"><span data-icon="tilt"></span><span>Калибровка</span></button>
         <div class="touch-actions">
           <button class="touch-button" id="attack" type="button" aria-label="Выстрелить гарпуном"><span data-icon="spear"></span><span>Гарпун</span></button>
           <button class="touch-button" id="knife" type="button" aria-label="Ударить ножом"><span data-icon="knife"></span><span>Нож</span></button>

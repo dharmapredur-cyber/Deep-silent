@@ -18,6 +18,7 @@ import android.window.OnBackInvokedDispatcher;
 public final class MainActivity extends Activity {
     private static final String ENTRY = "file:///android_asset/index.html";
     private WebView game;
+    private TiltControls tiltControls;
 
     @Override
     @SuppressLint("SetJavaScriptEnabled")
@@ -31,6 +32,8 @@ public final class MainActivity extends Activity {
         game.getSettings().setDomStorageEnabled(true);
         game.getSettings().setAllowContentAccess(false);
         game.getSettings().setAllowFileAccess(false);
+        tiltControls = new TiltControls(game);
+        game.addJavascriptInterface(tiltControls, "AndroidTilt");
         game.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -76,6 +79,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        if (tiltControls != null) tiltControls.setForeground(false);
         if (game != null) {
             game.evaluateJavascript("window.pauseDive && window.pauseDive()", null);
             game.onPause();
@@ -87,6 +91,7 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (game != null) game.onResume();
+        if (tiltControls != null) tiltControls.setForeground(true);
     }
 
     @Override
@@ -106,6 +111,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (game != null) {
+            tiltControls.setForeground(false);
+            game.removeJavascriptInterface("AndroidTilt");
             game.destroy();
             game = null;
         }

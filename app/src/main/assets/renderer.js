@@ -2,7 +2,7 @@
   'use strict';
 
   const W = window.DepthWorld;
-  const { knifeReach, knifeArc, knifeDuration, shieldDuration } = window.DepthSimulation;
+  const { knifeArc, knifeDuration, shieldDuration } = window.DepthSimulation;
   const tau = Math.PI * 2;
   const chunkSize = 384;
   const diverScale = 1.48;
@@ -330,8 +330,9 @@
       line(c, '#effff0', 1, [19, -7], [23, -6.8]);
     }
     if (dive.knifeSlash) {
+      const length = 8 + (dive.knifeSlash.reach - 56) * .18;
       line(c, '#2b555a', 2.5, [22, 2], [28, 2]);
-      polygon(c, '#e0f1de', [27, .2], [35, -1.6], [32, 3], [27, 3.4]);
+      polygon(c, '#e0f1de', [27, .2], [27 + length, -1.6], [24 + length, 3], [27, 3.4]);
     } else if (dive.value('weapon')) {
       line(c, '#b1d1c7', 2, [8, 6], [32, 5]);
       polygon(c, '#e5f2c7', [29, 2.4], [34, 4.9], [29, 7.3]);
@@ -348,13 +349,13 @@
     c.rotate(slash.angle);
     c.globalAlpha = (1 - progress) * .9;
     c.beginPath();
-    c.arc(0, 0, knifeReach, trailing, leading);
+    c.arc(0, 0, slash.reach, trailing, leading);
     c.strokeStyle = '#dcf4dc';
     c.lineWidth = 3.2;
     c.lineCap = 'round';
     c.stroke();
     c.beginPath();
-    c.arc(0, 0, knifeReach - 7, trailing + .03, leading);
+    c.arc(0, 0, slash.reach - 7, trailing + .03, leading);
     c.strokeStyle = '#a7dfd5';
     c.lineWidth = 1.5;
     c.stroke();
@@ -625,7 +626,7 @@
       if (visible(W.spawn.x, 0, 160)) boat(c, time);
       if (dive.atSurface) splash(c, p.x, 1, time);
 
-      for (const item of W.treasures) {
+      for (const item of dive.treasures) {
         if (visible(item.x, item.y) && dive.treasureAvailable(item)) treasure(c, item, time);
       }
       for (const obj of dive.mines) if (obj.live && visible(obj.x, obj.y)) mine(c, obj, time);
@@ -799,7 +800,7 @@
         c.lineWidth = 6;
         c.stroke();
       }
-      for (const item of W.treasures) {
+      for (const item of dive.treasures) {
         if (!dive.treasureAvailable(item)) continue;
         disc(c, item.x, item.y, item.type === 4 ? 24 : 15, W.treasureTypes[item.type].color);
       }

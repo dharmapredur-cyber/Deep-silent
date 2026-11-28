@@ -134,7 +134,7 @@
     { name: 'Артефакт', plural: 'Артефакты', xp: 290, color: '#c8acf9' },
     { name: 'Реликвия', plural: 'Реликвии', xp: 485, color: '#f7e1a3' },
   ];
-  const treasures = [
+  const treasureSites = [
     [480, 150, 0], [305, 245, 0], [580, 320, 0], [785, 350, 0], [1048, 308, 0],
     [150, 235, 0], [694, 407, 1], [1248, 506, 1], [1630, 625, 1],
     [2010, 507, 0], [2270, 536, 1], [2554, 831, 1], [3655, 1070, 1],
@@ -208,8 +208,151 @@
   function renewsAt(y) {
     return y >= 500 && y <= 1660;
   }
+
+  const layoutVersion = 1;
+  const depthLimits = [380, 1000, 1760, 2500, height];
+  const treasureWeights = [[78, 19, 2.6, .4], [37, 51, 10.5, 1.5], [13, 36, 43, 8], [5, 19, 58, 18], [3, 9, 47, 41]];
+  const predatorWeights = [[92, 6, 1, 1, 0], [50, 38, 9, 3, 0], [20, 36, 30, 13, 1], [8, 17, 34, 34, 7], [3, 10, 31, 42, 14]];
+  const relicGuards = [[55, 29], [56, 30], [57, 31]];
+  let habitat;
+
+  function depthBand(y) {
+    return depthLimits.findIndex(limit => y <= limit);
+  }
+
+  function distanceSquared(a, b) {
+    return (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+  }
+
+  // Flood from the sea surface so the generator never places a reward in an isolated pocket.
+  function findPlacementPoints() {
+    const distances = new Int16Array(cols * rows).fill(-1);
+    const queue = [];
+    for (let i = 0; i < cols; i++) {
+      if (cell(i, 0)) continue;
+      distances[i] = 0;
+      queue.push(i);
+    }
+    const points = [];
+    for (let head = 0; head < queue.length; head++) {
+      const index = queue[head];
+      const i = index % cols;
+      const j = Math.floor(index / cols);
+      const x = (i + .5) * tile;
+      const y = (j + .5) * tile;
+      const distance = distances[index];
+      if (distance > 175) continue;
+      if (y >= 60 && x >= 35 && x <= width - 35
+        && !mineSites.some(([mx, my]) => (mx - x) ** 2 + (my - y) ** 2 < 65 ** 2)) {
+        points.push({ x, y, band: depthBand(y), fitsPredator: fits(x, y, 17) });
+      }
+      for (const [nx, ny] of [[i-1, j], [i+1, j], [i, j-1], [i, j+1]]) {
+        if (ny < 0 || cell(nx, ny)) continue;
+        const next = ny * cols + nx;
+        if (distances[next] !== -1) continue;
+        distances[next] = distance + 1;
+        queue.push(next);
+      }
+    }
+    return points;
+  }
+
+  function findHabitats() {
+    const points = findPlacementPoints();
+    const treasureHabitats = treasureSites.map(anchor => {
+      const band = depthBand(anchor.y);
+      return points.filter(point => point.band === band
+        && (anchor.id === 0 ? Math.abs(point.x - spawn.x) < 220 && point.y < 246 : Math.abs(point.x - anchor.x) < 680));
+    });
+    const predatorHabitats = predatorSites.map(([x, y, , chance]) => {
+      const band = depthBand(y);
+      const nearSurface = chance !== undefined && y < 150;
+      return points.filter(point => point.band === band && point.fitsPredator
+        && Math.abs(point.x - x) < 780 && (point.y >= 380 || point.x > 720)
+        && (!nearSurface || point.y <= 170));
+    });
+    const relicHabitats = relicGuards.map(([relicId, guardId]) => {
+      const anchor = treasureSites[relicId];
+      const species = predatorTypes[predatorSites[guardId][2]];
+      const radius = species.electric.radius;
+      const chamber = points.filter(point => point.y > 2510 && distanceSquared(point, anchor) < (148 + radius) ** 2);
+      return chamber.filter(point => point.y > 2610 && distanceSquared(point, anchor) < 148 ** 2)
+        .map(relic => ({
+          relic,
+          guards: chamber.filter(point => {
+            const distance = distanceSquared(point, relic);
+            return point.fitsPredator && distance >= 69 ** 2 && distance < radius ** 2
+              && lineClear(point.x, point.y, relic.x, relic.y);
+          }),
+        })).filter(pair => pair.guards.length);
+    });
+    return { treasures: treasureHabitats, predators: predatorHabitats, relics: relicHabitats };
+  }
+
+  function generateLayout(layoutSeed) {
+    if (!habitat) habitat = findHabitats();
+    let state = layoutSeed >>> 0;
+    function random() {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state / 2 ** 32;
+    }
+    function weighted(weights) {
+      let value = random() * weights.reduce((total, weight) => total + weight, 0);
+      for (let i = 0; i < weights.length; i++) {
+        value -= weights[i];
+        if (value < 0) return i;
+      }
+      return weights.length - 1;
+    }
+    function pick(points) {
+      return points[Math.floor(random() * points.length)];
+    }
+    const treasureLocations = [];
+    const predatorLocations = [];
+    const apart = (points, point, distance) =>
+      points.every(other => distanceSquared(point, other) >= distance ** 2);
+
+    const treasures = new Array(treasureSites.length);
+    const predators = new Array(predatorSites.length);
+    for (const [chamber, [relicId, guardId]] of relicGuards.entries()) {
+      const anchor = treasureSites[relicId];
+      const [gx, gy, speciesId] = predatorSites[guardId];
+      const pair = pick(habitat.relics[chamber]);
+      const relic = pair ? pair.relic : anchor;
+      const guard = pair ? pick(pair.guards) : { x: gx, y: gy };
+      treasures[relicId] = { id: relicId, type: anchor.type, x: relic.x, y: relic.y };
+      predators[guardId] = { x: guard.x, y: guard.y, type: speciesId, active: true };
+      treasureLocations.push(relic);
+      predatorLocations.push(guard);
+    }
+
+    for (const anchor of treasureSites) {
+      if (treasures[anchor.id]) continue;
+      const band = depthBand(anchor.y);
+      const local = habitat.treasures[anchor.id].filter(point =>
+        apart(treasureLocations, point, 86) && apart(predatorLocations, point, 88));
+      const point = pick(local) || anchor;
+      treasures[anchor.id] = { id: anchor.id, x: point.x, y: point.y, type: weighted(treasureWeights[band]) };
+      treasureLocations.push(point);
+    }
+
+    for (const [id, [x, y, original, chance]] of predatorSites.entries()) {
+      if (predators[id]) continue;
+      const band = depthBand(y);
+      const travelsNearSurface = chance !== undefined && y < 150;
+      const active = chance === undefined || random() < chance;
+      const type = travelsNearSurface ? original : weighted(predatorWeights[band]);
+      const local = habitat.predators[id].filter(point =>
+        apart(predatorLocations, point, 168) && apart(treasureLocations, point, 56));
+      const point = pick(local) || { x, y };
+      predators[id] = { x: point.x, y: point.y, type, active };
+      if (active) predatorLocations.push(point);
+    }
+    return { treasures, predators };
+  }
+
   window.DepthWorld = {
     tile, cols, rows, width, height, spawn, clamp, mix, seed, terrain, cell, solid,
-    fits, lineClear, treasures, treasureTypes, mineSites, predatorTypes, predatorSites, zones, zone, renewsAt,
+    fits, lineClear, treasureTypes, mineSites, predatorTypes, zones, zone, renewsAt, generateLayout, layoutVersion,
   };
 })();

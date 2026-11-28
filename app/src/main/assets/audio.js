@@ -161,6 +161,34 @@
       this.breathSource = null;
     }
 
+    scream(out, time) {
+      const duration = .78;
+      const c = this.context;
+      const voice = c.createOscillator();
+      voice.type = 'sawtooth';
+      voice.frequency.setValueAtTime(176, time);
+      voice.frequency.exponentialRampToValueAtTime(284, time + .14);
+      voice.frequency.exponentialRampToValueAtTime(212, time + .39);
+      voice.frequency.exponentialRampToValueAtTime(125, time + duration);
+      const envelope = c.createGain();
+      envelope.gain.setValueAtTime(.0001, time);
+      envelope.gain.exponentialRampToValueAtTime(.44, time + .063);
+      envelope.gain.exponentialRampToValueAtTime(.25, time + .29);
+      envelope.gain.exponentialRampToValueAtTime(.0001, time + duration);
+      envelope.connect(out);
+      for (const [from, to, resonance] of [[755, 570, 2.1], [1310, 1010, 2.8], [2520, 1840, 4]]) {
+        const filter = c.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.Q.value = resonance;
+        filter.frequency.setValueAtTime(from, time);
+        filter.frequency.exponentialRampToValueAtTime(to, time + duration);
+        voice.connect(filter).connect(envelope);
+      }
+      this.noiseBurst(out, time + .01, .66, 1850, 710, .21, .062);
+      voice.start(time);
+      voice.stop(time + duration);
+    }
+
     play(kind, { volume = 1, pan = 0 } = {}) {
       if (this.muted || !this.master || this.context.state !== 'running' || volume < .025) return;
       const time = this.context.currentTime;
@@ -192,6 +220,13 @@
       } else if (kind === 'knife') {
         this.noiseBurst(out, time, .17, 2550, 720, .26, .02);
         this.note(out, time + .016, .09, 530, 320, .056);
+      } else if (kind === 'bite') {
+        this.noiseBurst(out, time, .16, 2650, 460, .51, .016);
+        this.noiseBurst(out, time + .025, .14, 570, 240, .38, .01, 'lowpass');
+        this.note(out, time + .01, .16, 122, 52, .19, 'triangle');
+      } else if (kind === 'death') {
+        this.stopBreath();
+        this.scream(out, time + .045);
       } else if (tones[kind]) {
         const [from, to, duration] = tones[kind];
         this.note(out, time, duration, from, to, .115, kind === 'damage' ? 'triangle' : 'sine');

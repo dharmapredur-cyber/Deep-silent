@@ -3,7 +3,7 @@
 
   const W = window.DepthWorld;
   const storageKey = 'quiet-depth-profile-v1';
-  const knifeReach = 56;
+  const knifeReaches = [56, 61, 67, 73];
   const knifeArc = .91;
   const knifeDuration = .20;
   const mineKitCost = 100;
@@ -17,6 +17,7 @@
     { id: 'speed', icon: 'bolt', name: 'Скорость', costs: [100, 215, 340], values: [218, 248, 279, 313], copy: 'Быстрее гребок и рывок.' },
     { id: 'life', icon: 'heart', name: 'Запас жизней', costs: [135, 275, 420], values: [3, 4, 5, 6], copy: 'Помогает пережить столкновения.' },
     { id: 'weapon', icon: 'spear', name: 'Гарпун', costs: [130, 280, 440], values: [0, 1, 2, 3], copy: 'Больше урона на расстоянии.' },
+    { id: 'knife', icon: 'knife', name: 'Нож', firstLevel: 1, costs: [95, 215, 350], values: [1, 1.5, 2, 3], reaches: knifeReaches },
     { id: 'insulation', icon: 'shield', name: 'Электрозащита', costs: [150, 270, 420], values: [0, 1, 2, 3], copy: 'Костюм защищает от разрядов скатов.' },
     { id: 'boostDuration', icon: 'bolt', name: 'Длительность рывка', firstLevel: 1, costs: [95, 190, 325], values: [2, 2.6, 3.3, 4], copy: 'Запас' },
     { id: 'boostRecovery', icon: 'air', name: 'Восстановление рывка', firstLevel: 1, costs: [100, 200, 335], values: [10, 8, 6.5, 5], copy: 'Полная зарядка' },
@@ -33,39 +34,46 @@
     return Object.fromEntries(entries);
   }
 
-  function profileFrom(saved = {}) {
+  function expeditionFrom(saved = {}) {
+    const savedSeed = saved.worldSeed ?? saved.patrolSeed;
+    const worldSeed = Number.isSafeInteger(savedSeed) ? savedSeed >>> 0 : Math.floor(Math.random() * 2 ** 32);
+    const layout = W.generateLayout(worldSeed);
     const levels = {};
     for (const item of upgrades) {
       const value = Number(saved.levels && saved.levels[item.id]) || 0;
       levels[item.id] = W.clamp(Math.floor(value), 0, item.costs.length);
     }
-    const haul = savedIds(saved.haul, W.treasures);
-    const gonePredators = savedIds(saved.gonePredators, W.predatorSites);
+    const sameLayout = saved.layoutVersion === W.layoutVersion && Number.isSafeInteger(saved.worldSeed);
+    const haul = sameLayout ? savedIds(saved.haul, layout.treasures) : [];
+    const gonePredators = sameLayout ? savedIds(saved.gonePredators, layout.predators) : [];
     const time = Date.now();
     const kits = Number.isSafeInteger(saved.kits) && saved.kits >= 0 ? saved.kits : 0;
-    return {
+    const profile = {
       xp: Math.max(0, Math.floor(Number(saved.xp) || 0)),
       levels,
       haul,
       gonePredators,
-      treasureRecovery: recoveryTimes(haul, time, saved.treasureRecovery, treasureDelay, id => W.treasures[id].y),
-      predatorRecovery: recoveryTimes(gonePredators, time, saved.predatorRecovery, predatorDelay, id => W.predatorSites[id][1]),
+      treasureRecovery: recoveryTimes(haul, time, saved.treasureRecovery, treasureDelay, id => layout.treasures[id].y),
+      predatorRecovery: recoveryTimes(gonePredators, time, saved.predatorRecovery, predatorDelay, id => layout.predators[id].y),
       kits,
       disarmedMines: savedIds(saved.disarmedMines, W.mineSites),
-      patrolSeed: Number.isSafeInteger(saved.patrolSeed) ? saved.patrolSeed : Math.floor(Math.random() * 2 ** 31),
+      layoutVersion: W.layoutVersion,
+      worldSeed,
+      controlMode: saved.controlMode === 'tilt' ? 'tilt' : 'stick',
       bestDepth: Math.max(0, Math.floor(Number(saved.bestDepth) || 0)),
       foundZones: Array.isArray(saved.foundZones) ? saved.foundZones.filter(id => W.zones.some(zone => zone.id === id)) : [],
       muted: saved.muted === true,
     };
+    return { profile, layout };
   }
 
   function load() {
     let saved;
     try { saved = JSON.parse(localStorage.getItem(storageKey)); } catch { saved = null; }
-    return profileFrom(saved && typeof saved === 'object' ? saved : {});
+    return expeditionFrom(saved && typeof saved === 'object' ? saved : {});
   }
 
-  function createPredator([x, y, type], id, dead = false) {
+  function createPredator({ x, y, type }, id, dead = false) {
     return {
       id, x, y, homeX: x, homeY: y, type, hp: W.predatorTypes[type].hp,
       dead, face: id % 2 ? 1 : -1, chasing: false, stagger: 0, phase: id * 2.399,
@@ -75,7 +83,7 @@
 
   class Dive {
     constructor(announce, end) {
-      this.profile = load();
+      Object.assign(this, load());
       this.announce = announce;
       this.end = end;
       this.resetExpedition();
@@ -91,6 +99,8 @@
 
     get atSurface() { return this.player.y <= 2; }
     get meters() { return Math.max(0, Math.round(this.player.y / 18)); }
+    get treasures() { return this.layout.treasures; }
+    get knifeReach() { return knifeReaches[this.profile.levels.knife]; }
 
     resetExpedition() {
       this.now = Date.now();
@@ -119,11 +129,9 @@
       this.mines = W.mineSites.map(([x, y], id) => ({
         x, y, id, live: !this.profile.disarmedMines.includes(id), fuse: 0,
       }));
-      this.predators = W.predatorSites.map((site, id) => {
-        const chance = site[3];
-        const absent = chance !== undefined && W.seed(this.profile.patrolSeed + id * 17) >= chance;
+      this.predators = this.layout.predators.map((site, id) => {
         const defeated = this.profile.gonePredators.includes(id) && !this.predatorReady(id);
-        return createPredator(site, id, absent || defeated);
+        return createPredator(site, id, !site.active || defeated);
       });
     }
 
@@ -167,7 +175,7 @@
       for (const predator of this.predators) {
         if (!predator.dead || !this.predatorReady(predator.id) || this.defeated.includes(predator.id)) continue;
         if (Math.hypot(p.x - predator.homeX, p.y - predator.homeY) < 220) continue;
-        this.predators[predator.id] = createPredator(W.predatorSites[predator.id], predator.id);
+        this.predators[predator.id] = createPredator(this.layout.predators[predator.id], predator.id);
       }
     }
 
@@ -247,7 +255,7 @@
 
     finish(cause) {
       if (this.expeditionEnded) return;
-      const { xp, bestDepth, muted } = this.profile;
+      const { xp, bestDepth, muted, controlMode } = this.profile;
       const lost = xp + this.pendingXp;
       this.player.lives = 0;
       this.player.air = 0;
@@ -255,11 +263,12 @@
       this.shieldPulse = 0;
       this.sprint = false;
       this.expeditionEnded = true;
-      this.profile = profileFrom({ bestDepth, muted });
+      Object.assign(this, expeditionFrom({ bestDepth, muted, controlMode }));
       this.haul = [];
       this.defeated = [];
       this.pendingXp = 0;
       this.save();
+      this.announce('death');
       this.end({ cause, lost });
     }
 
@@ -305,7 +314,8 @@
       const p = this.player;
       const angle = this.aim(x, y);
       this.knifeCooldown = .46;
-      this.knifeSlash = { angle, remaining: knifeDuration };
+      const reach = this.knifeReach;
+      this.knifeSlash = { angle, reach, remaining: knifeDuration };
       this.announce('knife');
 
       const aimX = Math.cos(angle);
@@ -318,13 +328,13 @@
         const dx = predator.x - p.x;
         const dy = predator.y - p.y;
         const range = Math.hypot(dx, dy);
-        if (range >= nearest || range > knifeReach + W.predatorTypes[predator.type].size * .55
+        if (range >= nearest || range > reach + W.predatorTypes[predator.type].size * .55
           || dx * aimX + dy * aimY < range * arcCos
           || !W.lineClear(p.x, p.y, predator.x, predator.y)) continue;
         target = predator;
         nearest = range;
       }
-      if (target) this.hitPredator(target, 1, target.x, target.y);
+      if (target) this.hitPredator(target, this.value('knife'), target.x, target.y);
     }
 
     hitPredator(predator, amount, x, y) {
@@ -347,18 +357,18 @@
         this.profile.xp += this.pendingXp;
         for (const id of this.haul) {
           if (!this.profile.haul.includes(id)) this.profile.haul.push(id);
-          if (W.renewsAt(W.treasures[id].y)) this.profile.treasureRecovery[id] = this.now + treasureDelay;
+          if (W.renewsAt(this.treasures[id].y)) this.profile.treasureRecovery[id] = this.now + treasureDelay;
         }
         for (const id of this.defeated) {
           if (!this.profile.gonePredators.includes(id)) this.profile.gonePredators.push(id);
-          if (W.renewsAt(W.predatorSites[id][1])) this.profile.predatorRecovery[id] = this.now + predatorDelay;
+          if (W.renewsAt(this.layout.predators[id].y)) this.profile.predatorRecovery[id] = this.now + predatorDelay;
         }
         this.announce('bank', '+' + this.pendingXp + ' ОП зачислено');
         this.spark(this.player.x, 2, '#dcfc93', 22);
         this.haul = [];
         this.defeated = [];
         this.pendingXp = 0;
-        if (treasureCount < W.treasures.length && this.profile.haul.length === W.treasures.length) {
+        if (treasureCount < this.treasures.length && this.profile.haul.length === this.treasures.length) {
           this.announce('milestone', 'Все сокровища найдены!');
         }
       }
@@ -459,7 +469,7 @@
       }
 
       if (!this.atSurface) {
-        for (const item of W.treasures) {
+        for (const item of this.treasures) {
           if (Math.hypot(item.x - p.x, item.y - p.y) > 27 || !this.treasureAvailable(item)
             || !W.lineClear(p.x, p.y, item.x, item.y)) continue;
           const info = W.treasureTypes[item.type];
@@ -559,7 +569,7 @@
         if (info.electric) {
           this.updateElectricAttack(predator, info, dt);
         } else if (predator.chasing && range < 10 + info.size * .67) {
-          this.damage(info.damage, info.name);
+          this.damage(info.damage, info.name, 'bite');
           predator.stagger = .55;
         }
         if (!p.lives) return;
@@ -588,5 +598,5 @@
     }
   }
 
-  window.DepthSimulation = { Dive, upgrades, knifeReach, knifeArc, knifeDuration, mineKitCost, shieldDuration };
+  window.DepthSimulation = { Dive, upgrades, knifeArc, knifeDuration, mineKitCost, shieldDuration };
 })();
